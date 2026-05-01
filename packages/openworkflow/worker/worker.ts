@@ -1,0 +1,370 @@
+import type { Backend } from "../core/backend.js";
+import { type BackoffPolicy, computeBackoffDelayMs } from "../core/backoff.js";
+import { parseDuration } from "../core/duration.js";
+import type { RetryPolicy, Workflow } from "../core/workflow-definition.js";
+import { DEFAULT_WORKFLOW_RETRY_POLICY } from "../core/workflow-definition.js";
+import { WorkflowRegistry } from "../core/workflow-registry.js";
+import type { WorkflowRun } from "../core/workflow-run.js";
+import { executeWorkflow } from "./execution.js";
+import { randomUUID } from "node:crypto";
+import * as nodeCrypto from "node:crypto";
+
+const DEFAULT_LEASE_DURATION_MS = 30 * 1000; // 30s
+const DEFAULT_POLL_BACKOFF_POLICY: BackoffPolicy = {
+  initialInterval: "100ms",
+  backoffCoefficient: 2,
+  maximumInterval: "1s",
+} as const;
+const DEFAULT_POLL_JITTER_FACTOR_MIN = 0.5;
+const DEFAULT_POLL_JITTER_FACTOR_MAX = 1;
+const DEFAULT_CONCURRENCY = 1;
+
+const MISSING_DEFINITION_RETRY_POLICY: RetryPolicy = {
+  initialInterval: "5s",
+  backoffCoefficient: 2,
+  maximumInterval: "5m",
+  maximumAttempts: 0, // unlimited – keep retrying until the right worker picks it up
+};
+
+/**
+ * Configures how a Worker polls the backend, leases workflow runs, and
+ * registers workflows.
+ */
+export interface WorkerOptions {
+  backend: Backend;
+  workflows: Workflow<unknown, unknown, unknown>[];
+  concurrency?: number | undefined;
+}
+
+/**
+ * Runs workflows by polling the backend, dispatching runs across a concurrency
+ * pool, and heartbeating/extending leases.
+ */
+export class Worker {
+  private readonly backend: Backend;
+  private readonly workerIds: string[];
+  private readonly registry = new WorkflowRegistry();
+  private readonly activeExecutions = new Set<WorkflowExecution>();
+  private running = false;
+  private loopPromise: Promise<void> | null = null;
+  private backoffAttempts = 0;
+
+  constructor(options: WorkerOptions) {
+    this.backend = options.backend;
+
+    for (const workflow of options.workflows) {
+      this.registry.register(workflow);
+    }
+
+    const concurrency = Math.max(
+      DEFAULT_CONCURRENCY,
+      options.concurrency ?? DEFAULT_CONCURRENCY,
+    );
+
+    // generate worker IDs for every concurrency slot
+    this.workerIds = Array.from({ length: concurrency }, () => randomUUID());
+  }
+
+  /**
+   * Start the worker. It will begin polling for and executing workflows.
+   * @returns Promise resolved when started
+   */
+  async start(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    this.backoffAttempts = 0;
+    this.loopPromise = this.runLoop();
+    await Promise.resolve();
+  }
+
+  /**
+   * Stop the worker gracefully. Waits for all active workflow runs to complete
+   * before returning.
+   * @returns Promise resolved when stopped
+   */
+  async stop(): Promise<void> {
+    this.running = false;
+
+    // wait for the poll loop to stop
+    if (this.loopPromise) await this.loopPromise;
+
+    // wait for all active executions to finish
+    while (this.activeExecutions.size > 0) await sleep(100);
+  }
+
+  /**
+   * Processes one round of work claims and execution. Exposed for testing.
+   * Returns the number of workflow runs claimed.
+   * @returns Number of workflow runs claimed
+   */
+  async tick(): Promise<number> {
+    const availableSlots = this.concurrency - this.activeExecutions.size;
+    if (availableSlots <= 0) return 0;
+
+    const activeWorkerIds = new Set(
+      Array.from(this.activeExecutions, (execution) => execution.workerId),
+    );
+    const availableWorkerIds = this.workerIds
+      .filter((workerId) => !activeWorkerIds.has(workerId))
+      .slice(0, availableSlots);
+
+    // claim work for each available slot
+    const claims = availableWorkerIds.map((workerId) =>
+      this.claimAndProcessWorkflowRunInBackground(workerId),
+    );
+
+    const claimed = await Promise.all(claims);
+    return claimed.filter((run) => run !== null).length;
+  }
+
+  /**
+   * Get the configured concurrency limit.
+   * @returns Concurrency limit
+   */
+  private get concurrency(): number {
+    return this.workerIds.length;
+  }
+
+  /*
+   * Main run loop that continuously ticks while the worker is running.
+   * Only sleeps when no work was claimed to avoid busy-waiting.
+   */
+  private async runLoop(): Promise<void> {
+    while (this.running) {
+      try {
+        const claimedCount = await this.tick();
+
+        if (claimedCount > 0) {
+          this.backoffAttempts = 0;
+        } else {
+          this.backoffAttempts += 1;
+          await sleep(getPollBackoffDelayMs(this.backoffAttempts));
+        }
+      } catch (error) {
+        console.error("Worker tick failed:", error);
+        this.backoffAttempts += 1;
+        await sleep(getPollBackoffDelayMs(this.backoffAttempts));
+      }
+    }
+  }
+
+  /*
+   * Claim and process a workflow run for the given worker ID. Do not await the
+   * processing here to avoid blocking the caller.
+   * Returns the claimed workflow run, or null if none was available.
+   */
+  private async claimAndProcessWorkflowRunInBackground(
+    workerId: string,
+  ): Promise<WorkflowRun | null> {
+    // claim workflow run
+    const workflowRun = await this.backend.claimWorkflowRun({
+      workerId,
+      leaseDurationMs: DEFAULT_LEASE_DURATION_MS,
+    });
+    if (!workflowRun) return null;
+
+    const workflow = this.registry.get(
+      workflowRun.workflowName,
+      workflowRun.version,
+    );
+    if (!workflow) {
+      const versionStr = workflowRun.version
+        ? ` (version: ${workflowRun.version})`
+        : "";
+      await this.backend.failWorkflowRun({
+        workflowRunId: workflowRun.id,
+        workerId,
+        error: {
+          message: `Workflow "${workflowRun.workflowName}"${versionStr} is not registered`,
+        },
+        retryPolicy: MISSING_DEFINITION_RETRY_POLICY,
+        attempts: workflowRun.attempts,
+        deadlineAt: workflowRun.deadlineAt,
+      });
+      return null;
+    }
+
+    // create execution and start processing *async* w/o blocking
+    const execution = new WorkflowExecution({
+      backend: this.backend,
+      workflowRun,
+      workerId,
+    });
+    this.activeExecutions.add(execution);
+
+    this.processExecutionInBackground(execution, workflow)
+      .catch(() => {
+        // errors are already handled in processExecution
+      })
+      .finally(() => {
+        execution.stopHeartbeat();
+        this.activeExecutions.delete(execution);
+      });
+
+    return workflowRun;
+  }
+
+  /**
+   * Process a workflow execution, handling heartbeats, step execution, and
+   * marking success or failure.
+   * @param execution - Workflow execution
+   * @param workflow - Workflow to execute
+   * @returns Promise resolved when processing completes
+   */
+  private async processExecutionInBackground(
+    execution: WorkflowExecution,
+    workflow: Workflow<unknown, unknown, unknown>,
+  ): Promise<void> {
+    // start heartbeating
+    execution.startHeartbeat();
+
+    try {
+      await executeWorkflow({
+        backend: this.backend,
+        workflowRun: execution.workflowRun,
+        workflowFn: workflow.fn,
+        workflowVersion: execution.workflowRun.version,
+        workerId: execution.workerId,
+        retryPolicy: resolveRetryPolicy(workflow.spec.retryPolicy),
+      });
+    } catch (error) {
+      // specifically for unexpected errors in the execution wrapper itself, not
+      // for business logic errors (those are handled inside executeWorkflow)
+      console.error(
+        `Critical error during workflow execution for run ${execution.workflowRun.id}:`,
+        error,
+      );
+    }
+  }
+}
+
+/**
+ * Configures the options for a WorkflowExecution.
+ */
+interface WorkflowExecutionOptions {
+  backend: Backend;
+  workflowRun: WorkflowRun;
+  workerId: string;
+}
+
+/**
+ * Tracks a claimed workflow run and maintains its heartbeat lease for the
+ * worker.
+ */
+class WorkflowExecution {
+  private backend: Backend;
+  workflowRun: WorkflowRun;
+  workerId: string;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+
+  constructor(options: WorkflowExecutionOptions) {
+    this.backend = options.backend;
+    this.workflowRun = options.workflowRun;
+    this.workerId = options.workerId;
+  }
+
+  /**
+   * Start the heartbeat loop for this execution, heartbeating at half the lease
+   * duration.
+   */
+  startHeartbeat(): void {
+    const leaseDurationMs = DEFAULT_LEASE_DURATION_MS;
+    const heartbeatIntervalMs = leaseDurationMs / 2;
+
+    this.heartbeatTimer = setInterval(() => {
+      this.backend
+        .extendWorkflowRunLease({
+          workflowRunId: this.workflowRun.id,
+          workerId: this.workerId,
+          leaseDurationMs,
+        })
+        .catch((error: unknown) => {
+          console.error("Heartbeat failed:", error);
+        });
+    }, heartbeatIntervalMs);
+  }
+
+  /**
+   * Stop the heartbeat loop.
+   */
+  stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+}
+
+/**
+ * Sleep for a given duration.
+ * @param ms - Milliseconds to sleep
+ * @returns Promise resolved after sleeping
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Compute polling delay with exponential backoff and jitter.
+ * @param backoffAttempts - Number of consecutive backoff attempts
+ * @returns Delay in milliseconds
+ */
+function getPollBackoffDelayMs(backoffAttempts: number): number {
+  const cappedBackoffMs = computeBackoffDelayMs(
+    DEFAULT_POLL_BACKOFF_POLICY,
+    backoffAttempts,
+  );
+
+  const jitterScale = nodeCrypto.randomInt(
+    Math.round(DEFAULT_POLL_JITTER_FACTOR_MIN * 1000),
+    Math.round(DEFAULT_POLL_JITTER_FACTOR_MAX * 1000) + 1,
+  );
+
+  return Math.max(1, Math.round((cappedBackoffMs * jitterScale) / 1000));
+}
+
+/**
+ * Resolve a partial retry policy by merging it with the default policy.
+ * @param partial - Optional partial retry policy from a workflow spec
+ * @returns A fully resolved retry policy
+ */
+export function resolveRetryPolicy(
+  partial?: Partial<RetryPolicy>,
+): RetryPolicy {
+  if (!partial) return DEFAULT_WORKFLOW_RETRY_POLICY;
+
+  const merged = { ...DEFAULT_WORKFLOW_RETRY_POLICY, ...partial };
+  return {
+    initialInterval: resolveDuration(
+      merged.initialInterval,
+      DEFAULT_WORKFLOW_RETRY_POLICY.initialInterval,
+    ),
+    backoffCoefficient:
+      Number.isFinite(merged.backoffCoefficient) &&
+      merged.backoffCoefficient > 0
+        ? merged.backoffCoefficient
+        : DEFAULT_WORKFLOW_RETRY_POLICY.backoffCoefficient,
+    maximumInterval: resolveDuration(
+      merged.maximumInterval,
+      DEFAULT_WORKFLOW_RETRY_POLICY.maximumInterval,
+    ),
+    maximumAttempts:
+      Number.isInteger(merged.maximumAttempts) && merged.maximumAttempts >= 0
+        ? merged.maximumAttempts
+        : DEFAULT_WORKFLOW_RETRY_POLICY.maximumAttempts,
+  };
+}
+
+/**
+ * Return a duration string when it parses to a positive value, otherwise fallback.
+ * @param value - Duration string to validate
+ * @param fallback - Default duration string to use when invalid
+ * @returns Valid duration string
+ */
+function resolveDuration(
+  value: RetryPolicy["initialInterval"],
+  fallback: RetryPolicy["initialInterval"],
+): RetryPolicy["initialInterval"] {
+  const parsed = parseDuration(value);
+  return parsed.ok && parsed.value > 0 ? value : fallback;
+}

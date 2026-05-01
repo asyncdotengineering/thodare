@@ -1,0 +1,66 @@
+{
+  "name": "@thodare/engine",
+  "version": "0.1.0",
+  "description": "Typed, durable workflows for AI-driven internal ops. Connector-shaped DSL + LLM-facing patch surface, executed on openworkflow's Postgres-durable runtime.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js",
+        "default": "./dist/index.js"
+      }
+    },
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LEARNINGS.md",
+    "ARCHITECTURE.md",
+    "THREAT-MODEL.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo": "tsx examples/dx-fluent.ts",
+    "demo:legacy": "tsx examples/llm-round-trip-durable.ts",
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "tsc -p tsconfig.json"
+  },
+  "keywords": [
+    "thodare",
+    "workflow",
+    "durable",
+    "openworkflow",
+    "ai",
+    "agents",
+    "postgres",
+    "control-plane"
+  ],
+  "license": "MIT",
+  "homepage": "https://thodare.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/asyncdotengineering/thodare.git",
+    "directory": "packages/engine"
+  },
+  "dependencies": {
+    "@thodare/openworkflow": "workspace:*",
+    "postgres": "^3.4.9",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  }
+}

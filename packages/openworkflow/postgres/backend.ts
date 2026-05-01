@@ -1,0 +1,1019 @@
+import {
+  toWorkflowRunCounts,
+  DEFAULT_NAMESPACE_ID,
+  DEFAULT_RUN_IDEMPOTENCY_PERIOD_MS,
+  Backend,
+  WorkflowRunCounts,
+  CancelWorkflowRunParams,
+  ClaimWorkflowRunParams,
+  CreateStepAttemptParams,
+  CreateWorkflowRunParams,
+  GetStepAttemptParams,
+  GetWorkflowRunParams,
+  ExtendWorkflowRunLeaseParams,
+  ListStepAttemptsParams,
+  ListWorkflowRunsParams,
+  PaginatedResponse,
+  FailStepAttemptParams,
+  CompleteStepAttemptParams,
+  SetStepAttemptChildWorkflowRunParams,
+  FailWorkflowRunParams,
+  RescheduleWorkflowRunAfterFailedStepAttemptParams,
+  CompleteWorkflowRunParams,
+  SleepWorkflowRunParams,
+  SendSignalParams,
+  SendSignalResult,
+  GetSignalDeliveryParams,
+} from "../core/backend.js";
+import {
+  buildPaginatedResponse,
+  DEFAULT_PAGINATION_PAGE_SIZE,
+  decodeListCursor,
+  type Cursor,
+} from "../core/cursor.js";
+import { requireRow, wrapError } from "../core/error.js";
+import { JsonValue } from "../core/json.js";
+import { StepAttempt } from "../core/step-attempt.js";
+import { computeFailedWorkflowRunUpdate } from "../core/workflow-definition.js";
+import {
+  resolveCancelWorkflowRunConflict,
+  WorkflowRun,
+} from "../core/workflow-run.js";
+import {
+  newPostgres,
+  newPostgresMaxOne,
+  Postgres,
+  PostgresFragment,
+  migrate,
+  DEFAULT_SCHEMA,
+  assertValidSchemaName,
+} from "./postgres.js";
+
+interface BackendPostgresOptions {
+  namespaceId?: string;
+  runMigrations?: boolean;
+  schema?: string;
+}
+
+/**
+ * Manages a connection to a Postgres database for workflow operations.
+ */
+export class BackendPostgres implements Backend {
+  private pg: Postgres;
+  private namespaceId: string;
+  private schema: string;
+
+  private constructor(pg: Postgres, namespaceId: string, schema: string) {
+    this.pg = pg;
+    this.namespaceId = namespaceId;
+    this.schema = schema;
+  }
+
+  /**
+   * Create and initialize a new BackendPostgres instance. This will
+   * automatically run migrations on startup unless `runMigrations` is set to
+   * false.
+   * @param url - Postgres connection URL
+   * @param options - Backend options
+   * @returns A connected backend instance
+   * @throws {Error} Error connecting to the Postgres database
+   */
+  static async connect(
+    url: string,
+    options?: BackendPostgresOptions,
+  ): Promise<BackendPostgres> {
+    const { namespaceId, runMigrations, schema } = {
+      namespaceId: DEFAULT_NAMESPACE_ID,
+      runMigrations: true,
+      schema: DEFAULT_SCHEMA,
+      ...options,
+    };
+    assertValidSchemaName(schema);
+
+    try {
+      if (runMigrations) {
+        const pgForMigrate = newPostgresMaxOne(url);
+        await migrate(pgForMigrate, schema);
+        await pgForMigrate.end();
+      }
+
+      const pg = newPostgres(url);
+      return new BackendPostgres(pg, namespaceId, schema);
+    } catch (error) {
+      throw wrapError(
+        'Postgres backend failed to connect. Check the connection URL (e.g. "postgresql://user:pass@host:port/db").',
+        error,
+      );
+    }
+  }
+
+  /**
+   * Create a BackendPostgres instance from an existing Postgres connection pool.
+   * Unlike `connect`, this does not create a new pool or run migrations — the
+   * caller is responsible for pool lifecycle and ensuring migrations have
+   * already been applied.
+   * @param pg - An existing Postgres connection pool
+   * @param options - Backend options (namespaceId, schema)
+   * @returns A BackendPostgres instance sharing the provided pool
+   */
+  static fromPool(
+    pg: Postgres,
+    options?: Omit<BackendPostgresOptions, "runMigrations">,
+  ): BackendPostgres {
+    const { namespaceId, schema } = {
+      namespaceId: DEFAULT_NAMESPACE_ID,
+      schema: DEFAULT_SCHEMA,
+      ...options,
+    };
+    assertValidSchemaName(schema);
+    return new BackendPostgres(pg, namespaceId, schema);
+  }
+
+  async stop(): Promise<void> {
+    await this.pg.end();
+  }
+
+  async createWorkflowRun(
+    params: CreateWorkflowRunParams,
+  ): Promise<WorkflowRun> {
+    if (params.idempotencyKey === null) {
+      return await this.insertWorkflowRun(this.pg, params);
+    }
+
+    const { workflowName, idempotencyKey } = params;
+    const lockScope = JSON.stringify({
+      namespaceId: this.namespaceId,
+      workflowName,
+      idempotencyKey,
+    });
+
+    const pgReserved = (await this.pg.reserve()) as unknown as Postgres & {
+      release: () => void;
+    };
+
+    try {
+      await pgReserved.unsafe(
+        "SELECT pg_advisory_lock(hashtextextended($1, 0::bigint))",
+        [lockScope],
+      );
+
+      try {
+        const existing = await this.getWorkflowRunByIdempotencyKey(
+          pgReserved,
+          workflowName,
+          idempotencyKey,
+          new Date(Date.now() - DEFAULT_RUN_IDEMPOTENCY_PERIOD_MS),
+        );
+        if (existing) {
+          return existing;
+        }
+
+        return await this.insertWorkflowRun(pgReserved, params);
+      } finally {
+        await pgReserved
+          .unsafe(
+            "SELECT pg_advisory_unlock(hashtextextended($1, 0::bigint))",
+            [lockScope],
+          )
+          .catch(() => {
+            // best effort unlock; session close also releases session advisory locks
+          });
+      }
+    } finally {
+      pgReserved.release();
+    }
+  }
+
+  private async insertWorkflowRun(
+    pg: Postgres,
+    params: CreateWorkflowRunParams,
+  ): Promise<WorkflowRun> {
+    const workflowRunsTable = this.workflowRunsTable(pg);
+    const parentStepAttemptNamespaceId =
+      params.parentStepAttemptNamespaceId ?? null;
+    const parentStepAttemptId = params.parentStepAttemptId ?? null;
+
+    const [workflowRun] = await pg<WorkflowRun[]>`
+      INSERT INTO ${workflowRunsTable} (
+        "namespace_id",
+        "id",
+        "workflow_name",
+        "version",
+        "status",
+        "idempotency_key",
+        "config",
+        "context",
+        "input",
+        "attempts",
+        "parent_step_attempt_namespace_id",
+        "parent_step_attempt_id",
+        "available_at",
+        "deadline_at",
+        "created_at",
+        "updated_at"
+      )
+      VALUES (
+        ${this.namespaceId},
+        gen_random_uuid(),
+        ${params.workflowName},
+        ${params.version},
+        'pending',
+        ${params.idempotencyKey},
+        ${pg.json(params.config)},
+        ${pg.json(params.context)},
+        ${pg.json(params.input)},
+        0,
+        ${parentStepAttemptNamespaceId},
+        ${parentStepAttemptId},
+        ${sqlDateDefaultNow(pg, params.availableAt)},
+        ${params.deadlineAt},
+        date_trunc('milliseconds', NOW()),
+        NOW()
+      )
+      RETURNING *
+    `;
+
+    requireRow(workflowRun, "create workflow run");
+
+    return workflowRun;
+  }
+
+  private async getWorkflowRunByIdempotencyKey(
+    pg: Postgres,
+    workflowName: string,
+    idempotencyKey: string,
+    createdAt: Date,
+  ): Promise<WorkflowRun | null> {
+    const workflowRunsTable = this.workflowRunsTable(pg);
+
+    const [workflowRun] = await pg<WorkflowRun[]>`
+      SELECT *
+      FROM ${workflowRunsTable}
+      WHERE "namespace_id" = ${this.namespaceId}
+        AND "workflow_name" = ${workflowName}
+        AND "idempotency_key" = ${idempotencyKey}
+        AND "created_at" >= ${createdAt}
+      ORDER BY "created_at" ASC, "id" ASC
+      LIMIT 1
+    `;
+
+    return workflowRun ?? null;
+  }
+
+  async getWorkflowRun(
+    params: GetWorkflowRunParams,
+  ): Promise<WorkflowRun | null> {
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [workflowRun] = await this.pg<WorkflowRun[]>`
+      SELECT *
+      FROM ${workflowRunsTable}
+      WHERE "namespace_id" = ${this.namespaceId}
+      AND "id" = ${params.workflowRunId}
+      LIMIT 1
+    `;
+
+    return workflowRun ?? null;
+  }
+
+  async sendSignal(params: SendSignalParams): Promise<SendSignalResult> {
+    return await this.pg.begin(async (sql): Promise<SendSignalResult> => {
+      const tx = sql as unknown as Postgres;
+      const stepAttemptsTable = this.stepAttemptsTable(tx);
+      const workflowSignalsTable = this.workflowSignalsTable(tx);
+
+      if (params.idempotencyKey !== null) {
+        const existing = await tx<{ workflowRunId: string }[]>`
+            SELECT DISTINCT "workflow_run_id" AS "workflowRunId"
+            FROM ${workflowSignalsTable}
+            WHERE "namespace_id" = ${this.namespaceId}
+              AND "signal" = ${params.signal}
+              AND "sender_idempotency_key" = ${params.idempotencyKey}
+          `;
+        if (existing.length > 0) {
+          return { workflowRunIds: existing.map((r) => r.workflowRunId) };
+        }
+      }
+      const workflowRunsTable = this.workflowRunsTable(tx);
+
+      const waiters = await tx<{ id: string; workflowRunId: string }[]>`
+          SELECT "id", "workflow_run_id" AS "workflowRunId"
+          FROM ${stepAttemptsTable}
+          WHERE "namespace_id" = ${this.namespaceId}
+            AND "kind" = 'signal-wait'
+            AND "status" = 'running'
+            AND "context"->>'signal' = ${params.signal}
+          FOR UPDATE
+        `;
+
+      if (waiters.length === 0) {
+        return { workflowRunIds: [] };
+      }
+
+      const deliveredRunIds = new Set<string>();
+      for (const w of waiters) {
+        const inserted = await tx`
+            INSERT INTO ${workflowSignalsTable} (
+              "namespace_id", "id", "signal", "data",
+              "sender_idempotency_key", "workflow_run_id",
+              "step_attempt_id", "created_at"
+            )
+            VALUES (
+              ${this.namespaceId},
+              gen_random_uuid(),
+              ${params.signal},
+              ${tx.json(params.data)},
+              ${params.idempotencyKey},
+              ${w.workflowRunId},
+              ${w.id},
+              NOW()
+            )
+            ON CONFLICT ("namespace_id", "step_attempt_id") DO NOTHING
+            RETURNING "workflow_run_id"
+          `;
+        if (inserted.length > 0) {
+          deliveredRunIds.add(w.workflowRunId);
+        }
+      }
+
+      if (deliveredRunIds.size === 0) {
+        return { workflowRunIds: [] };
+      }
+
+      // wake each waiting workflow run
+      const runIds = [...deliveredRunIds];
+      await tx`
+          UPDATE ${workflowRunsTable}
+          SET
+            "available_at" = CASE
+              WHEN "available_at" IS NULL OR "available_at" > NOW()
+                THEN NOW()
+              ELSE "available_at"
+            END,
+            "updated_at" = NOW()
+          WHERE "namespace_id" = ${this.namespaceId}
+            AND "id" = ANY(${runIds})
+            AND "status" IN ('pending', 'running', 'sleeping')
+            AND "worker_id" IS NULL
+        `;
+
+      return { workflowRunIds: runIds };
+    });
+  }
+
+  async getSignalDelivery(
+    params: GetSignalDeliveryParams,
+  ): Promise<JsonValue | undefined> {
+    const workflowSignalsTable = this.workflowSignalsTable();
+
+    const [row] = await this.pg<{ data: JsonValue | null }[]>`
+      SELECT "data"
+      FROM ${workflowSignalsTable}
+      WHERE "namespace_id" = ${this.namespaceId}
+        AND "step_attempt_id" = ${params.stepAttemptId}
+      LIMIT 1
+    `;
+
+    return row ? (row.data ?? null) : undefined;
+  }
+
+  async listWorkflowRuns(
+    params: ListWorkflowRunsParams,
+  ): Promise<PaginatedResponse<WorkflowRun>> {
+    const limit = params.limit ?? DEFAULT_PAGINATION_PAGE_SIZE;
+    const { after, before } = params;
+    const cursor = decodeListCursor(params);
+
+    const whereClause = this.buildListWorkflowRunsWhere(params, cursor);
+    const order = before
+      ? this.pg`ORDER BY "created_at" ASC, "id" ASC`
+      : this.pg`ORDER BY "created_at" DESC, "id" DESC`;
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const rows = await this.pg<WorkflowRun[]>`
+      SELECT *
+      FROM ${workflowRunsTable}
+      WHERE ${whereClause}
+      ${order}
+      LIMIT ${limit + 1}
+    `;
+
+    return buildPaginatedResponse(rows, limit, !!after, !!before);
+  }
+
+  private buildListWorkflowRunsWhere(
+    params: ListWorkflowRunsParams,
+    cursor: Cursor | null,
+  ) {
+    const { after } = params;
+    const conditions = [this.pg`"namespace_id" = ${this.namespaceId}`];
+
+    if (cursor) {
+      const op = after ? this.pg`<` : this.pg`>`;
+      conditions.push(
+        this.pg`("created_at", "id") ${op} (${cursor.createdAt}, ${cursor.id})`,
+      );
+    }
+
+    return this.joinConditionsWithAnd(conditions);
+  }
+
+  async countWorkflowRuns(): Promise<WorkflowRunCounts> {
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const rows = await this.pg<{ status: string; count: string }[]>`
+      SELECT "status", COUNT(*) AS "count"
+      FROM ${workflowRunsTable}
+      WHERE "namespace_id" = ${this.namespaceId}
+      GROUP BY "status"
+    `;
+
+    return toWorkflowRunCounts(rows);
+  }
+
+  async claimWorkflowRun(
+    params: ClaimWorkflowRunParams,
+  ): Promise<WorkflowRun | null> {
+    // 1. mark any deadline-expired workflow runs as failed
+    // 2. find an available workflow run to claim
+    // 3. claim the workflow run
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [claimed] = await this.pg<WorkflowRun[]>`
+      WITH expired AS (
+        UPDATE ${workflowRunsTable}
+        SET
+          "status" = 'failed',
+          "error" = ${this.pg.json({ message: "Workflow run deadline exceeded" })},
+          "worker_id" = NULL,
+          "available_at" = NULL,
+          "finished_at" = NOW(),
+          "updated_at" = NOW()
+        WHERE "namespace_id" = ${this.namespaceId}
+          AND "status" IN ('pending', 'running', 'sleeping')
+          AND "deadline_at" IS NOT NULL
+          AND "deadline_at" <= NOW()
+        RETURNING "id"
+      ),
+      candidate AS (
+        SELECT "id"
+        FROM ${workflowRunsTable}
+        WHERE "namespace_id" = ${this.namespaceId}
+          AND "status" IN ('pending', 'running', 'sleeping')
+          AND "available_at" <= NOW()
+          AND ("deadline_at" IS NULL OR "deadline_at" > NOW())
+        ORDER BY
+          CASE WHEN "status" = 'pending' THEN 0 ELSE 1 END,
+          "available_at",
+          "created_at"
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE ${workflowRunsTable} AS wr
+      SET
+        "status" = 'running',
+        "attempts" = "attempts" + 1,
+        "worker_id" = ${params.workerId},
+        "available_at" = NOW() + ${params.leaseDurationMs} * INTERVAL '1 millisecond',
+        "started_at" = COALESCE("started_at", NOW()),
+        "updated_at" = NOW()
+      FROM candidate
+      WHERE wr."id" = candidate."id"
+        AND wr."namespace_id" = ${this.namespaceId}
+      RETURNING wr.*;
+    `;
+
+    return claimed ?? null;
+  }
+
+  async extendWorkflowRunLease(
+    params: ExtendWorkflowRunLeaseParams,
+  ): Promise<WorkflowRun> {
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [updated] = await this.pg<WorkflowRun[]>`
+      UPDATE ${workflowRunsTable}
+      SET
+        "available_at" = ${this.pg`NOW() + ${params.leaseDurationMs} * INTERVAL '1 millisecond'`},
+        "updated_at" = NOW()
+      WHERE ${this.runningWorkflowRunOwnedByWorkerWhere(params)}
+      RETURNING *
+    `;
+
+    requireRow(updated, "extend lease for workflow run");
+
+    return updated;
+  }
+
+  async sleepWorkflowRun(params: SleepWorkflowRunParams): Promise<WorkflowRun> {
+    // 'sleeping' and 'succeeded' statuses are deprecated
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [updated] = await this.pg<WorkflowRun[]>`
+      UPDATE ${workflowRunsTable}
+      SET
+        "status" = 'running',
+        "available_at" = ${params.availableAt},
+        "worker_id" = NULL,
+        "updated_at" = NOW()
+      WHERE "namespace_id" = ${this.namespaceId}
+      AND "id" = ${params.workflowRunId}
+      AND "status" != 'succeeded'
+      AND "status" != 'completed'
+      AND "status" != 'failed'
+      AND "status" != 'canceled'
+      AND "worker_id" = ${params.workerId}
+      RETURNING *
+    `;
+
+    requireRow(updated, "sleep workflow run");
+
+    const reconciled = await this.reconcileWorkflowSleepWakeUp(
+      params.workflowRunId,
+    );
+    return reconciled ?? updated;
+  }
+
+  /**
+   * Reconcile a just-parked parent run that is waiting on workflow replay. If the
+   * child already reached a terminal state before the parent cleared workerId,
+   * the normal child-completion wake-up can be missed. This forces an immediate
+   * wake-up for that case.
+   * @param workflowRunId - Parent workflow run id
+   * @returns Updated run when reconciliation changed availability, otherwise null
+   */
+  private async reconcileWorkflowSleepWakeUp(
+    workflowRunId: string,
+  ): Promise<WorkflowRun | null> {
+    const workflowRunsTable = this.workflowRunsTable();
+    const stepAttemptsTable = this.stepAttemptsTable();
+
+    const [updated] = await this.pg<WorkflowRun[]>`
+      UPDATE ${workflowRunsTable} wr
+      SET
+        "available_at" = CASE
+          WHEN wr."available_at" IS NULL OR wr."available_at" > NOW()
+            THEN NOW()
+          ELSE wr."available_at"
+        END,
+        "updated_at" = NOW()
+      WHERE wr."namespace_id" = ${this.namespaceId}
+      AND wr."id" = ${workflowRunId}
+      AND wr."status" = 'running'
+      AND wr."worker_id" IS NULL
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM ${stepAttemptsTable} sa
+          JOIN ${workflowRunsTable} child
+            ON child."namespace_id" = sa."child_workflow_run_namespace_id"
+            AND child."id" = sa."child_workflow_run_id"
+          WHERE sa."namespace_id" = wr."namespace_id"
+          AND sa."workflow_run_id" = wr."id"
+          AND sa."kind" = 'workflow'
+          AND sa."status" = 'running'
+          AND child."status" IN ('completed', 'succeeded', 'failed', 'canceled')
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM ${stepAttemptsTable} sa
+          JOIN ${this.workflowSignalsTable()} ws
+            ON ws."namespace_id" = sa."namespace_id"
+            AND ws."step_attempt_id" = sa."id"
+          WHERE sa."namespace_id" = wr."namespace_id"
+          AND sa."workflow_run_id" = wr."id"
+          AND sa."kind" = 'signal-wait'
+          AND sa."status" = 'running'
+        )
+      )
+      RETURNING wr.*
+    `;
+
+    return updated ?? null;
+  }
+
+  async completeWorkflowRun(
+    params: CompleteWorkflowRunParams,
+  ): Promise<WorkflowRun> {
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [updated] = await this.pg<WorkflowRun[]>`
+      UPDATE ${workflowRunsTable}
+      SET
+        "status" = 'completed',
+        "output" = ${this.pg.json(params.output)},
+        "error" = NULL,
+        "worker_id" = ${params.workerId},
+        "available_at" = NULL,
+        "finished_at" = NOW(),
+        "updated_at" = NOW()
+      WHERE ${this.runningWorkflowRunOwnedByWorkerWhere(params)}
+      RETURNING *
+    `;
+
+    requireRow(updated, "mark workflow run completed");
+
+    await this.wakeParentWorkflowRun(updated);
+
+    return updated;
+  }
+
+  async failWorkflowRun(params: FailWorkflowRunParams): Promise<WorkflowRun> {
+    const { workflowRunId, error } = params;
+    const currentTime = new Date();
+    let attempts = params.attempts;
+    let deadlineAt = params.deadlineAt;
+
+    // Backward-compatible fallback for external callers that don't pass state.
+    if (attempts === undefined || deadlineAt === undefined) {
+      const workflowRun = await this.getWorkflowRun({ workflowRunId });
+      if (!workflowRun) throw new Error("Workflow run not found");
+      attempts = workflowRun.attempts;
+      deadlineAt = workflowRun.deadlineAt;
+    }
+
+    const failureUpdate = computeFailedWorkflowRunUpdate(
+      params.retryPolicy,
+      attempts,
+      deadlineAt,
+      error,
+      currentTime,
+    );
+
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [updated] = await this.pg<WorkflowRun[]>`
+      UPDATE ${workflowRunsTable}
+      SET
+        "status" = ${failureUpdate.status},
+        "available_at" = ${failureUpdate.availableAt},
+        "finished_at" = ${failureUpdate.finishedAt},
+        "error" = ${this.pg.json(failureUpdate.error)},
+        "worker_id" = NULL,
+        "started_at" = NULL,
+        "updated_at" = NOW()
+      WHERE ${this.runningWorkflowRunOwnedByWorkerWhere(params)}
+      RETURNING *
+    `;
+
+    requireRow(updated, "mark workflow run failed");
+
+    if (updated.status === "failed") {
+      await this.wakeParentWorkflowRun(updated);
+    }
+
+    return updated;
+  }
+
+  async rescheduleWorkflowRunAfterFailedStepAttempt(
+    params: RescheduleWorkflowRunAfterFailedStepAttemptParams,
+  ): Promise<WorkflowRun> {
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [updated] = await this.pg<WorkflowRun[]>`
+      UPDATE ${workflowRunsTable}
+      SET
+        "status" = 'pending',
+        "available_at" = ${params.availableAt},
+        "finished_at" = NULL,
+        "error" = ${this.pg.json(params.error)},
+        "worker_id" = NULL,
+        "started_at" = NULL,
+        "updated_at" = NOW()
+      WHERE ${this.runningWorkflowRunOwnedByWorkerWhere(params)}
+      RETURNING *
+    `;
+
+    requireRow(updated, "reschedule workflow run after failed step attempt");
+
+    return updated;
+  }
+
+  async cancelWorkflowRun(
+    params: CancelWorkflowRunParams,
+  ): Promise<WorkflowRun> {
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [updated] = await this.pg<WorkflowRun[]>`
+      UPDATE ${workflowRunsTable}
+      SET
+        "status" = 'canceled',
+        "worker_id" = NULL,
+        "available_at" = NULL,
+        "finished_at" = NOW(),
+        "updated_at" = NOW()
+      WHERE "namespace_id" = ${this.namespaceId}
+      AND "id" = ${params.workflowRunId}
+      AND "status" IN ('pending', 'running', 'sleeping')
+      RETURNING *
+    `;
+
+    if (!updated) {
+      // workflow may already be in a terminal state
+      const existing = await this.getWorkflowRun({
+        workflowRunId: params.workflowRunId,
+      });
+      return resolveCancelWorkflowRunConflict(params.workflowRunId, existing);
+    }
+
+    await this.wakeParentWorkflowRun(updated);
+
+    return updated;
+  }
+
+  private async wakeParentWorkflowRun(
+    childWorkflowRun: Readonly<WorkflowRun>,
+  ): Promise<void> {
+    if (
+      !childWorkflowRun.parentStepAttemptNamespaceId ||
+      !childWorkflowRun.parentStepAttemptId
+    ) {
+      return;
+    }
+
+    const workflowRunsTable = this.workflowRunsTable();
+    const stepAttemptsTable = this.stepAttemptsTable();
+
+    await this.pg`
+      UPDATE ${workflowRunsTable} wr
+      SET
+        "available_at" = CASE
+          WHEN wr."available_at" IS NULL OR wr."available_at" > NOW()
+            THEN NOW()
+          ELSE wr."available_at"
+        END,
+        "updated_at" = NOW()
+      FROM ${stepAttemptsTable} sa
+      WHERE sa."namespace_id" = ${childWorkflowRun.parentStepAttemptNamespaceId}
+      AND sa."id" = ${childWorkflowRun.parentStepAttemptId}
+      AND sa."kind" = 'workflow'
+      AND sa."status" = 'running'
+      AND sa."child_workflow_run_namespace_id" = ${childWorkflowRun.namespaceId}
+      AND sa."child_workflow_run_id" = ${childWorkflowRun.id}
+      AND wr."namespace_id" = sa."namespace_id"
+      AND wr."id" = sa."workflow_run_id"
+      AND (
+        wr."status" = 'sleeping'
+        OR (wr."status" = 'running' AND wr."worker_id" IS NULL)
+      )
+    `;
+  }
+
+  async createStepAttempt(
+    params: CreateStepAttemptParams,
+  ): Promise<StepAttempt> {
+    const stepAttemptsTable = this.stepAttemptsTable();
+
+    const [stepAttempt] = await this.pg<StepAttempt[]>`
+      INSERT INTO ${stepAttemptsTable} (
+        "namespace_id",
+        "id",
+        "workflow_run_id",
+        "step_name",
+        "kind",
+        "status",
+        "config",
+        "context",
+        "started_at",
+        "created_at",
+        "updated_at"
+      )
+      VALUES (
+        ${this.namespaceId},
+        gen_random_uuid(),
+        ${params.workflowRunId},
+        ${params.stepName},
+        ${params.kind},
+        'running',
+        ${this.pg.json(params.config)},
+        ${this.pg.json(params.context as JsonValue)},
+        NOW(),
+        date_trunc('milliseconds', NOW()),
+        NOW()
+      )
+      RETURNING *
+    `;
+
+    requireRow(stepAttempt, "create step attempt");
+
+    return stepAttempt;
+  }
+
+  async setStepAttemptChildWorkflowRun(
+    params: SetStepAttemptChildWorkflowRunParams,
+  ): Promise<StepAttempt> {
+    const stepAttemptsTable = this.stepAttemptsTable();
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [updated] = await this.pg<StepAttempt[]>`
+      UPDATE ${stepAttemptsTable} sa
+      SET
+        "child_workflow_run_namespace_id" = ${params.childWorkflowRunNamespaceId},
+        "child_workflow_run_id" = ${params.childWorkflowRunId},
+        "updated_at" = NOW()
+      FROM ${workflowRunsTable} wr
+      WHERE ${this.runningStepAttemptOwnedByWorkerWhere(params)}
+      RETURNING sa.*
+    `;
+
+    requireRow(updated, "set step attempt child workflow run");
+
+    return updated;
+  }
+
+  async getStepAttempt(
+    params: GetStepAttemptParams,
+  ): Promise<StepAttempt | null> {
+    const stepAttemptsTable = this.stepAttemptsTable();
+
+    const [stepAttempt] = await this.pg<StepAttempt[]>`
+      SELECT *
+      FROM ${stepAttemptsTable}
+      WHERE "namespace_id" = ${this.namespaceId}
+      AND "id" = ${params.stepAttemptId}
+      LIMIT 1
+    `;
+    return stepAttempt ?? null;
+  }
+
+  async listStepAttempts(
+    params: ListStepAttemptsParams,
+  ): Promise<PaginatedResponse<StepAttempt>> {
+    const limit = params.limit ?? DEFAULT_PAGINATION_PAGE_SIZE;
+    const { after, before } = params;
+    const cursor = decodeListCursor(params);
+
+    const whereClause = this.buildListStepAttemptsWhere(params, cursor);
+    const order = before
+      ? this.pg`ORDER BY "created_at" DESC, "id" DESC`
+      : this.pg`ORDER BY "created_at" ASC, "id" ASC`;
+    const stepAttemptsTable = this.stepAttemptsTable();
+
+    const rows = await this.pg<StepAttempt[]>`
+      SELECT *
+      FROM ${stepAttemptsTable}
+      WHERE ${whereClause}
+      ${order}
+      LIMIT ${limit + 1}
+    `;
+
+    return buildPaginatedResponse(rows, limit, !!after, !!before);
+  }
+
+  private buildListStepAttemptsWhere(
+    params: ListStepAttemptsParams,
+    cursor: Cursor | null,
+  ) {
+    const { after } = params;
+    const conditions = [
+      this.pg`"namespace_id" = ${this.namespaceId}`,
+      this.pg`"workflow_run_id" = ${params.workflowRunId}`,
+    ];
+
+    if (cursor) {
+      const op = after ? this.pg`>` : this.pg`<`;
+      conditions.push(
+        this.pg`("created_at", "id") ${op} (${cursor.createdAt}, ${cursor.id})`,
+      );
+    }
+
+    return this.joinConditionsWithAnd(conditions);
+  }
+
+  /**
+   * Match a running workflow run currently owned by the given worker. Shared
+   * by the workflow-run mutation queries which all fence on this same
+   * condition.
+   * @param params - Identifiers for the workflow run and owning worker
+   * @returns Combined WHERE fragment for the unaliased workflow_runs table
+   */
+  private runningWorkflowRunOwnedByWorkerWhere(
+    params: Readonly<{ workflowRunId: string; workerId: string }>,
+  ): PostgresFragment {
+    return this.pg`
+      "namespace_id" = ${this.namespaceId}
+      AND "id" = ${params.workflowRunId}
+      AND "status" = 'running'
+      AND "worker_id" = ${params.workerId}
+    `;
+  }
+
+  /**
+   * Match a running step attempt currently owned by the given worker, joined
+   * against its parent workflow run (also running and held by the same
+   * worker). Shared by the step-attempt mutation queries which all fence on
+   * this same condition.
+   * @param params - Identifiers for the step attempt and owning worker
+   * @returns Combined WHERE fragment using `sa`/`wr` aliases
+   */
+  private runningStepAttemptOwnedByWorkerWhere(
+    params: Readonly<{
+      workflowRunId: string;
+      stepAttemptId: string;
+      workerId: string;
+    }>,
+  ): PostgresFragment {
+    return this.pg`
+      sa."namespace_id" = ${this.namespaceId}
+      AND sa."workflow_run_id" = ${params.workflowRunId}
+      AND sa."id" = ${params.stepAttemptId}
+      AND sa."status" = 'running'
+      AND wr."namespace_id" = sa."namespace_id"
+      AND wr."id" = sa."workflow_run_id"
+      AND wr."status" = 'running'
+      AND wr."worker_id" = ${params.workerId}
+    `;
+  }
+
+  /**
+   * AND-compose a non-empty array of query fragments into a single WHERE
+   * expression. Empty arrays are rejected because the caller's conditions
+   * list is always seeded with at least one predicate.
+   * @param conditions - Query fragments to AND together
+   * @returns Combined WHERE fragment
+   * @throws {Error} When the array is empty
+   */
+  private joinConditionsWithAnd(
+    conditions: PostgresFragment[],
+  ): PostgresFragment {
+    let whereClause = conditions[0];
+    if (!whereClause) throw new Error("No conditions");
+
+    for (let i = 1; i < conditions.length; i++) {
+      const condition = conditions[i];
+      if (condition) {
+        whereClause = this.pg`${whereClause} AND ${condition}`;
+      }
+    }
+    return whereClause;
+  }
+
+  async completeStepAttempt(
+    params: CompleteStepAttemptParams,
+  ): Promise<StepAttempt> {
+    const stepAttemptsTable = this.stepAttemptsTable();
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [updated] = await this.pg<StepAttempt[]>`
+      UPDATE ${stepAttemptsTable} sa
+      SET
+        "status" = 'completed',
+        "output" = ${this.pg.json(params.output)},
+        "error" = NULL,
+        "finished_at" = NOW(),
+        "updated_at" = NOW()
+      FROM ${workflowRunsTable} wr
+      WHERE ${this.runningStepAttemptOwnedByWorkerWhere(params)}
+      RETURNING sa.*
+    `;
+
+    requireRow(updated, "mark step attempt completed");
+
+    return updated;
+  }
+
+  async failStepAttempt(params: FailStepAttemptParams): Promise<StepAttempt> {
+    const stepAttemptsTable = this.stepAttemptsTable();
+    const workflowRunsTable = this.workflowRunsTable();
+
+    const [updated] = await this.pg<StepAttempt[]>`
+      UPDATE ${stepAttemptsTable} sa
+      SET
+        "status" = 'failed',
+        "output" = NULL,
+        "error" = ${this.pg.json(params.error)},
+        "finished_at" = NOW(),
+        "updated_at" = NOW()
+      FROM ${workflowRunsTable} wr
+      WHERE ${this.runningStepAttemptOwnedByWorkerWhere(params)}
+      RETURNING sa.*
+    `;
+
+    requireRow(updated, "mark step attempt failed");
+
+    return updated;
+  }
+
+  private workflowRunsTable(pg: Postgres = this.pg) {
+    return pg`${pg(this.schema)}.${pg("workflow_runs")}`;
+  }
+
+  private stepAttemptsTable(pg: Postgres = this.pg) {
+    return pg`${pg(this.schema)}.${pg("step_attempts")}`;
+  }
+
+  private workflowSignalsTable(pg: Postgres = this.pg) {
+    return pg`${pg(this.schema)}.${pg("workflow_signals")}`;
+  }
+}
+
+/**
+ * sqlDateDefaultNow returns the provided date or `NOW()` if not.
+ * This is needed so we don't have to disable the eslint rule for every query.
+ * @param pg - Postgres client
+ * @param date - Date to use (or null)
+ * @returns The provided date or a NOW() expression
+ */
+function sqlDateDefaultNow(pg: Postgres, date: Date | null) {
+  return date ?? pg`NOW()`;
+}

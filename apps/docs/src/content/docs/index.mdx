@@ -1,0 +1,70 @@
+---
+title: Thodare
+description: "Typed, durable workflows for AI-driven internal ops."
+template: splash
+hero:
+  tagline: Connector-shaped DSL + LLM-native patch surface, executed on openworkflow's Postgres-durable runtime. Multi-tenant from day one. The Tamil தொடர் (thodar) — chain — is right there in the name.
+  image:
+    file: ../../../public/thodare-mascot.png
+  actions:
+    - text: Quickstart
+      link: /thodare/start/quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: GitHub
+      link: https://github.com/asyncdotengineering/thodare
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+## What you get
+
+<CardGrid stagger>
+  <Card title="Built for LLMs" icon="open-book">
+    The patch endpoint accepts `EditOp[]` and returns *typed skips* on every
+    bad op — feedable directly back to the LLM as tool output. Single-shot
+    workflow construction works because the API explains its own rejections.
+  </Card>
+  <Card title="Durable by default" icon="setting">
+    Every step runs through openworkflow's Postgres-backed runtime.
+    Crashes, redeploys, restarts — runs resume where they paused. No
+    bolt-on caching; durability *is* the substrate.
+  </Card>
+  <Card title="Multi-tenant from day one" icon="seti:lock">
+    Auth via better-auth. Cookie sessions for UIs, `thd_…` API keys for
+    LLM orchestrators. Every workflow / run / schedule is scoped to an
+    organization. Tenant isolation is structural, not advisory.
+  </Card>
+  <Card title="Connector-shaped DSL" icon="puzzle">
+    Block↔Tool split, `visibility` flag, declared output schemas, `kind:
+    'wait'` blocks for durable pauses. One Slack connector exposes 30
+    operations as one block, not 30 functions.
+  </Card>
+</CardGrid>
+
+## Get started in 90 seconds
+
+```sh
+npm install -g @thodare/cli
+thodare login --api http://localhost:3000
+curl -H "Authorization: Bearer $(thodare token)" \
+     http://localhost:3000/api/connectors
+```
+
+The `login` command runs the entire sign-up + org + key bootstrap in
+one shot. From there it's curl, or any HTTP client. See
+[Quickstart](/thodare/start/quickstart/) for the full path from cold
+start to a workflow that runs.
+
+## Where to next
+
+- New here? Read [What is Thodare?](/thodare/start/what-is-thodare/) — the 5-minute primer.
+- Want a working example? Walk [Build your first workflow](/thodare/tutorials/first-workflow/).
+- Building a feature? Check the [How-to guides](/thodare/how-to/define-connector/).
+- Diving deep? Start with [How a run executes](/thodare/explanation/how-it-runs/).
+
+Thodare stands on the work of [openworkflow](https://github.com/openworkflowdev/openworkflow)
+(Apache-2.0; vendored as `@thodare/openworkflow`). See
+[Acknowledgements](/thodare/project/acknowledgements/).

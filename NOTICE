@@ -1,0 +1,33 @@
+Thodare
+Copyright 2026 asyncdotengineering
+
+This product includes software developed at the following projects.
+We're grateful for their work; without it, none of this exists.
+
+
+====================================================================
+openworkflow  (Apache-2.0)
+====================================================================
+Source: https://github.com/openworkflowdev/openworkflow
+License: Apache-2.0 (see packages/openworkflow/LICENSE.md for the
+         original text).
+
+Thodare vendors openworkflow as `@thodare/openworkflow` so we can pin
+a known-good revision and apply Thodare-specific patches. The vendored
+copy lives at `packages/openworkflow/`. Significant changes from
+upstream are listed in `packages/openworkflow/UPSTREAM.md`.
+
+Per the Apache-2.0 license, the original copyright notices and the
+license text are preserved in `packages/openworkflow/`. No claim is
+made to authorship of upstream openworkflow code; modifications to it
+by asyncdotengineering are clearly marked in commit history and in
+UPSTREAM.md.
+
+
+====================================================================
+Other dependencies
+====================================================================
+Standard runtime dependencies (Hono, better-auth, postgres, pg, zod,
+Astro, Starlight, openworkflow's own deps) keep their own licenses,
+listed in each package.json. See `pnpm licenses list` in the root
+workspace for a generated audit.

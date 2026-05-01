@@ -1,0 +1,36 @@
+# --- node / pnpm ---
+node_modules/
+.pnpm-store/
+
+# --- build output ---
+dist/
+.astro/
+*.tsbuildinfo
+
+# --- secrets / local credentials ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- editor / OS ---
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# --- runtime artifacts ---
+*.log
+.vitest/
+.vite/
+coverage/
+.nyc_output/
+
+# --- generated images (kept locally, not in git) ---
+.agents/generated-images/
+
+# --- changeset working state ---
+.changeset/pre.json

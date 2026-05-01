@@ -1,0 +1,1192 @@
+import {
+  WorkflowRunCounts,
+  DEFAULT_NAMESPACE_ID,
+  DEFAULT_RUN_IDEMPOTENCY_PERIOD_MS,
+  Backend,
+  CancelWorkflowRunParams,
+  ClaimWorkflowRunParams,
+  CreateStepAttemptParams,
+  CreateWorkflowRunParams,
+  GetStepAttemptParams,
+  GetWorkflowRunParams,
+  ExtendWorkflowRunLeaseParams,
+  ListStepAttemptsParams,
+  ListWorkflowRunsParams,
+  PaginatedResponse,
+  FailStepAttemptParams,
+  CompleteStepAttemptParams,
+  SetStepAttemptChildWorkflowRunParams,
+  FailWorkflowRunParams,
+  RescheduleWorkflowRunAfterFailedStepAttemptParams,
+  CompleteWorkflowRunParams,
+  SleepWorkflowRunParams,
+  SendSignalParams,
+  SendSignalResult,
+  GetSignalDeliveryParams,
+  toWorkflowRunCounts,
+} from "../core/backend.js";
+import {
+  buildPaginatedResponse,
+  type Cursor,
+  DEFAULT_PAGINATION_PAGE_SIZE,
+  decodeListCursor,
+} from "../core/cursor.js";
+import { requireRow, wrapError } from "../core/error.js";
+import { JsonValue } from "../core/json.js";
+import { StepAttempt } from "../core/step-attempt.js";
+import { computeFailedWorkflowRunUpdate } from "../core/workflow-definition.js";
+import {
+  resolveCancelWorkflowRunConflict,
+  WorkflowRun,
+} from "../core/workflow-run.js";
+import {
+  newDatabase,
+  Database,
+  migrate,
+  generateUUID,
+  now,
+  addMilliseconds,
+  toJSON,
+  fromJSON,
+  toISO,
+  fromISO,
+} from "./sqlite.js";
+
+interface BackendSqliteOptions {
+  namespaceId?: string;
+  runMigrations?: boolean;
+}
+
+/**
+ * WHERE fragment matching a running workflow run currently owned by the given
+ * worker. Consumes 3 positional placeholders: `namespace_id`, `id`,
+ * `worker_id`. Pair with {@link BackendSqlite#runningWorkflowRunOwnedParams}
+ * to keep the placeholders aligned.
+ */
+const RUNNING_WORKFLOW_RUN_OWNED_WHERE = `
+      "namespace_id" = ?
+      AND "id" = ?
+      AND "status" = 'running'
+      AND "worker_id" = ?`;
+
+/**
+ * WHERE fragment matching a running step attempt whose parent workflow run is
+ * also running and held by the given worker. Consumes 6 positional
+ * placeholders: step attempt's namespace, workflow_run_id, id, then the
+ * parent workflow run's namespace, id, worker_id. Pair with
+ * {@link BackendSqlite#runningStepAttemptOwnedParams} to keep the
+ * placeholders aligned.
+ */
+const RUNNING_STEP_ATTEMPT_OWNED_WHERE = `
+      "namespace_id" = ?
+      AND "workflow_run_id" = ?
+      AND "id" = ?
+      AND "status" = 'running'
+      AND EXISTS (
+        SELECT 1
+        FROM "workflow_runs" wr
+        WHERE wr."namespace_id" = ?
+        AND wr."id" = ?
+        AND wr."status" = 'running'
+        AND wr."worker_id" = ?
+      )`;
+
+/**
+ * Manages a connection to a SQLite database for workflow operations.
+ */
+export class BackendSqlite implements Backend {
+  private db: Database;
+  private namespaceId: string;
+
+  private constructor(db: Database, namespaceId: string) {
+    this.db = db;
+    this.namespaceId = namespaceId;
+  }
+
+  /**
+   * Create and initialize a new BackendSqlite instance. This will
+   * automatically run migrations on startup unless `runMigrations` is set to
+   * false.
+   * @param path - Database path
+   * @param options - Backend options
+   * @returns A connected backend instance
+   * @throws {Error} Error connecting to the SQLite database
+   */
+  static connect(path: string, options?: BackendSqliteOptions): BackendSqlite {
+    const { namespaceId, runMigrations } = {
+      namespaceId: DEFAULT_NAMESPACE_ID,
+      runMigrations: true,
+      ...options,
+    };
+
+    try {
+      const db = newDatabase(path);
+
+      if (runMigrations) {
+        migrate(db);
+      }
+
+      return new BackendSqlite(db, namespaceId);
+    } catch (error) {
+      throw wrapError(
+        "SQLite backend failed to open database. Check the path is valid and writable.",
+        error,
+      );
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async stop(): Promise<void> {
+    this.db.close();
+  }
+
+  createWorkflowRun(params: CreateWorkflowRunParams): Promise<WorkflowRun> {
+    const { workflowName, idempotencyKey } = params;
+
+    if (idempotencyKey === null) {
+      return Promise.resolve(this.insertWorkflowRun(params));
+    }
+
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+
+      const existing = this.getWorkflowRunByIdempotencyKey(
+        workflowName,
+        idempotencyKey,
+        new Date(Date.now() - DEFAULT_RUN_IDEMPOTENCY_PERIOD_MS),
+      );
+      if (existing) {
+        this.db.exec("COMMIT");
+        return Promise.resolve(existing);
+      }
+
+      const workflowRun = this.insertWorkflowRun(params);
+      this.db.exec("COMMIT");
+      return Promise.resolve(workflowRun);
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // ignore
+      }
+
+      return Promise.reject(
+        error instanceof Error ? error : new Error(String(error)),
+      );
+    }
+  }
+
+  private insertWorkflowRun(params: CreateWorkflowRunParams): WorkflowRun {
+    const id = generateUUID();
+    const currentTime = now();
+    const availableAt = params.availableAt
+      ? toISO(params.availableAt)
+      : currentTime;
+    const parentStepAttemptNamespaceId =
+      params.parentStepAttemptNamespaceId ?? null;
+    const parentStepAttemptId = params.parentStepAttemptId ?? null;
+
+    const stmt = this.db.prepare(`
+      INSERT INTO "workflow_runs" (
+        "namespace_id",
+        "id",
+        "workflow_name",
+        "version",
+        "status",
+        "idempotency_key",
+        "config",
+        "context",
+        "input",
+        "attempts",
+        "parent_step_attempt_namespace_id",
+        "parent_step_attempt_id",
+        "available_at",
+        "deadline_at",
+        "created_at",
+        "updated_at"
+      )
+      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      this.namespaceId,
+      id,
+      params.workflowName,
+      params.version,
+      params.idempotencyKey,
+      toJSON(params.config),
+      toJSON(params.context),
+      toJSON(params.input),
+      parentStepAttemptNamespaceId,
+      parentStepAttemptId,
+      availableAt,
+      toISO(params.deadlineAt),
+      currentTime,
+      currentTime,
+    );
+
+    const row = this.db
+      .prepare(
+        `
+      SELECT *
+      FROM "workflow_runs"
+      WHERE "namespace_id" = ? AND "id" = ?
+      LIMIT 1
+    `,
+      )
+      .get(this.namespaceId, id) as WorkflowRunRow | undefined;
+    requireRow(row, "create workflow run");
+
+    return rowToWorkflowRun(row);
+  }
+
+  private getWorkflowRunByIdempotencyKey(
+    workflowName: string,
+    idempotencyKey: string,
+    createdAt: Date,
+  ): WorkflowRun | null {
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM "workflow_runs"
+      WHERE "namespace_id" = ?
+        AND "workflow_name" = ?
+        AND "idempotency_key" = ?
+        AND "created_at" >= ?
+      ORDER BY "created_at" ASC, "id" ASC
+      LIMIT 1
+    `);
+
+    const row = stmt.get(
+      this.namespaceId,
+      workflowName,
+      idempotencyKey,
+      toISO(createdAt),
+    ) as WorkflowRunRow | undefined;
+    return row ? rowToWorkflowRun(row) : null;
+  }
+
+  getWorkflowRun(params: GetWorkflowRunParams): Promise<WorkflowRun | null> {
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM "workflow_runs"
+      WHERE "namespace_id" = ? AND "id" = ?
+      LIMIT 1
+    `);
+
+    const row = stmt.get(this.namespaceId, params.workflowRunId) as
+      | WorkflowRunRow
+      | undefined;
+
+    return Promise.resolve(row ? rowToWorkflowRun(row) : null);
+  }
+
+  sendSignal(params: SendSignalParams): Promise<SendSignalResult> {
+    const currentTime = now();
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (params.idempotencyKey !== null) {
+        const existingStmt = this.db.prepare(`
+          SELECT DISTINCT "workflow_run_id"
+          FROM "workflow_signals"
+          WHERE "namespace_id" = ? AND "signal" = ? AND "sender_idempotency_key" = ?
+        `);
+        const existing = existingStmt.all(
+          this.namespaceId,
+          params.signal,
+          params.idempotencyKey,
+        ) as { workflow_run_id: string }[];
+        if (existing.length > 0) {
+          this.db.exec("COMMIT");
+          return Promise.resolve({
+            workflowRunIds: existing.map((r) => r.workflow_run_id),
+          });
+        }
+      }
+      const waitersStmt = this.db.prepare(`
+        SELECT "id", "workflow_run_id"
+        FROM "step_attempts"
+        WHERE "namespace_id" = ?
+          AND "kind" = 'signal-wait'
+          AND "status" = 'running'
+          AND json_extract("context", '$.signal') = ?
+      `);
+      const waiters = waitersStmt.all(this.namespaceId, params.signal) as {
+        id: string;
+        workflow_run_id: string;
+      }[];
+
+      if (waiters.length === 0) {
+        this.db.exec("COMMIT");
+        return Promise.resolve({ workflowRunIds: [] });
+      }
+
+      const insertStmt = this.db.prepare(`
+        INSERT OR IGNORE INTO "workflow_signals" (
+          "namespace_id", "id", "signal", "data",
+          "sender_idempotency_key", "workflow_run_id",
+          "step_attempt_id", "created_at"
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const deliveredRunIds = new Set<string>();
+      for (const w of waiters) {
+        const result = insertStmt.run(
+          this.namespaceId,
+          generateUUID(),
+          params.signal,
+          toJSON(params.data),
+          params.idempotencyKey,
+          w.workflow_run_id,
+          w.id,
+          currentTime,
+        );
+        if (result.changes > 0) {
+          deliveredRunIds.add(w.workflow_run_id);
+        }
+      }
+
+      if (deliveredRunIds.size === 0) {
+        this.db.exec("COMMIT");
+        return Promise.resolve({ workflowRunIds: [] });
+      }
+
+      // wake each waiting workflow run
+      const runIds = [...deliveredRunIds];
+      const wakeStmt = this.db.prepare(`
+        UPDATE "workflow_runs"
+        SET
+          "available_at" = CASE
+            WHEN "available_at" IS NULL OR "available_at" > ? THEN ?
+            ELSE "available_at"
+          END,
+          "updated_at" = ?
+        WHERE "namespace_id" = ?
+          AND "id" = ?
+          AND "status" IN ('pending', 'running', 'sleeping')
+          AND "worker_id" IS NULL
+      `);
+      for (const runId of runIds) {
+        wakeStmt.run(
+          currentTime,
+          currentTime,
+          currentTime,
+          this.namespaceId,
+          runId,
+        );
+      }
+
+      this.db.exec("COMMIT");
+      return Promise.resolve({ workflowRunIds: runIds });
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getSignalDelivery(
+    params: GetSignalDeliveryParams,
+  ): Promise<JsonValue | undefined> {
+    const stmt = this.db.prepare(`
+      SELECT "data"
+      FROM "workflow_signals"
+      WHERE "namespace_id" = ? AND "step_attempt_id" = ?
+      LIMIT 1
+    `);
+    const row = stmt.get(this.namespaceId, params.stepAttemptId) as
+      | { data: string | null }
+      | undefined;
+
+    // eslint-disable-next-line unicorn/no-useless-undefined
+    if (!row) return Promise.resolve<JsonValue | undefined>(undefined);
+    return Promise.resolve(
+      (fromJSON(row.data) as JsonValue | undefined) ?? null,
+    );
+  }
+
+  async claimWorkflowRun(
+    params: ClaimWorkflowRunParams,
+  ): Promise<WorkflowRun | null> {
+    const currentTime = now();
+    const newAvailableAt = addMilliseconds(currentTime, params.leaseDurationMs);
+
+    // SQLite doesn't have SKIP LOCKED, so we need to handle claims differently
+    this.db.exec("BEGIN IMMEDIATE");
+
+    try {
+      // 1. mark any deadline-expired workflow runs as failed
+      const expireStmt = this.db.prepare(`
+        UPDATE "workflow_runs"
+        SET
+          "status" = 'failed',
+          "error" = ?,
+          "worker_id" = NULL,
+          "available_at" = NULL,
+          "finished_at" = ?,
+          "updated_at" = ?
+        WHERE "namespace_id" = ?
+          AND "status" IN ('pending', 'running', 'sleeping')
+          AND "deadline_at" IS NOT NULL
+          AND "deadline_at" <= ?
+      `);
+
+      expireStmt.run(
+        toJSON({ message: "Workflow run deadline exceeded" }),
+        currentTime,
+        currentTime,
+        this.namespaceId,
+        currentTime,
+      );
+
+      // 2. find an available workflow run to claim
+      const findStmt = this.db.prepare(`
+        SELECT "id"
+        FROM "workflow_runs"
+        WHERE "namespace_id" = ?
+          AND "status" IN ('pending', 'running', 'sleeping')
+          AND "available_at" <= ?
+          AND ("deadline_at" IS NULL OR "deadline_at" > ?)
+        ORDER BY
+          CASE WHEN "status" = 'pending' THEN 0 ELSE 1 END,
+          "available_at",
+          "created_at"
+        LIMIT 1
+      `);
+
+      const candidate = findStmt.get(
+        this.namespaceId,
+        currentTime,
+        currentTime,
+      ) as { id: string } | undefined;
+
+      if (!candidate) {
+        this.db.exec("COMMIT");
+        return null;
+      }
+
+      // 3. claim the workflow run
+      const claimStmt = this.db.prepare(`
+        UPDATE "workflow_runs"
+        SET
+          "status" = 'running',
+          "attempts" = "attempts" + 1,
+          "worker_id" = ?,
+          "available_at" = ?,
+          "started_at" = COALESCE("started_at", ?),
+          "updated_at" = ?
+        WHERE "id" = ?
+          AND "namespace_id" = ?
+      `);
+
+      claimStmt.run(
+        params.workerId,
+        newAvailableAt,
+        currentTime,
+        currentTime,
+        candidate.id,
+        this.namespaceId,
+      );
+
+      this.db.exec("COMMIT");
+
+      return await this.getWorkflowRun({ workflowRunId: candidate.id });
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  async extendWorkflowRunLease(
+    params: ExtendWorkflowRunLeaseParams,
+  ): Promise<WorkflowRun> {
+    const currentTime = now();
+    const newAvailableAt = addMilliseconds(currentTime, params.leaseDurationMs);
+
+    const stmt = this.db.prepare(`
+      UPDATE "workflow_runs"
+      SET
+        "available_at" = ?,
+        "updated_at" = ?
+      WHERE ${RUNNING_WORKFLOW_RUN_OWNED_WHERE}
+      RETURNING *
+    `);
+
+    const row = stmt.get(
+      newAvailableAt,
+      currentTime,
+      ...this.runningWorkflowRunOwnedParams(params),
+    ) as WorkflowRunRow | undefined;
+    requireRow(row, "extend lease for workflow run");
+
+    return await Promise.resolve(rowToWorkflowRun(row));
+  }
+
+  async sleepWorkflowRun(params: SleepWorkflowRunParams): Promise<WorkflowRun> {
+    const currentTime = now();
+    const resumeAt = toISO(params.availableAt);
+
+    const stmt = this.db.prepare(`
+      UPDATE "workflow_runs"
+      SET
+        "status" = 'running',
+        "available_at" = CASE
+          WHEN (
+            EXISTS (
+              SELECT 1
+              FROM "step_attempts" sa
+              JOIN "workflow_runs" child
+                ON child."namespace_id" = sa."child_workflow_run_namespace_id"
+                AND child."id" = sa."child_workflow_run_id"
+              WHERE sa."namespace_id" = "workflow_runs"."namespace_id"
+              AND sa."workflow_run_id" = "workflow_runs"."id"
+              AND sa."kind" = 'workflow'
+              AND sa."status" = 'running'
+              AND child."status" IN ('completed', 'succeeded', 'failed', 'canceled')
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM "step_attempts" sa
+              JOIN "workflow_signals" ws
+                ON ws."namespace_id" = sa."namespace_id"
+                AND ws."step_attempt_id" = sa."id"
+              WHERE sa."namespace_id" = "workflow_runs"."namespace_id"
+              AND sa."workflow_run_id" = "workflow_runs"."id"
+              AND sa."kind" = 'signal-wait'
+              AND sa."status" = 'running'
+            )
+          ) AND ? > ? THEN ?
+          ELSE ?
+        END,
+        "worker_id" = NULL,
+        "updated_at" = ?
+      WHERE "namespace_id" = ?
+      AND "id" = ?
+      AND "status" NOT IN ('succeeded', 'completed', 'failed', 'canceled')
+      AND "worker_id" = ?
+      RETURNING *
+    `);
+
+    const row = stmt.get(
+      resumeAt,
+      currentTime,
+      currentTime,
+      resumeAt,
+      currentTime,
+      this.namespaceId,
+      params.workflowRunId,
+      params.workerId,
+    ) as WorkflowRunRow | undefined;
+    requireRow(row, "sleep workflow run");
+
+    return await Promise.resolve(rowToWorkflowRun(row));
+  }
+
+  async completeWorkflowRun(
+    params: CompleteWorkflowRunParams,
+  ): Promise<WorkflowRun> {
+    const currentTime = now();
+
+    const stmt = this.db.prepare(`
+      UPDATE "workflow_runs"
+      SET
+        "status" = 'completed',
+        "output" = ?,
+        "error" = NULL,
+        "worker_id" = ?,
+        "available_at" = NULL,
+        "finished_at" = ?,
+        "updated_at" = ?
+      WHERE ${RUNNING_WORKFLOW_RUN_OWNED_WHERE}
+      RETURNING *
+    `);
+
+    const row = stmt.get(
+      toJSON(params.output),
+      params.workerId,
+      currentTime,
+      currentTime,
+      ...this.runningWorkflowRunOwnedParams(params),
+    ) as WorkflowRunRow | undefined;
+    requireRow(row, "mark workflow run completed");
+
+    const updated = rowToWorkflowRun(row);
+    this.wakeParentWorkflowRun(updated);
+    return await Promise.resolve(updated);
+  }
+
+  async failWorkflowRun(params: FailWorkflowRunParams): Promise<WorkflowRun> {
+    const { workflowRunId, error } = params;
+    const currentTime = new Date();
+    const currentTimeIso = currentTime.toISOString();
+    let attempts = params.attempts;
+    let deadlineAt = params.deadlineAt;
+
+    // Backward-compatible fallback for external callers that don't pass state.
+    if (attempts === undefined || deadlineAt === undefined) {
+      const workflowRun = await this.getWorkflowRun({ workflowRunId });
+      if (!workflowRun) throw new Error("Workflow run not found");
+      attempts = workflowRun.attempts;
+      deadlineAt = workflowRun.deadlineAt;
+    }
+
+    const failureUpdate = computeFailedWorkflowRunUpdate(
+      params.retryPolicy,
+      attempts,
+      deadlineAt,
+      error,
+      currentTime,
+    );
+
+    const stmt = this.db.prepare(`
+      UPDATE "workflow_runs"
+      SET
+        "status" = ?,
+        "available_at" = ?,
+        "finished_at" = ?,
+        "error" = ?,
+        "worker_id" = NULL,
+        "started_at" = NULL,
+        "updated_at" = ?
+      WHERE ${RUNNING_WORKFLOW_RUN_OWNED_WHERE}
+      RETURNING *
+    `);
+
+    const row = stmt.get(
+      failureUpdate.status,
+      failureUpdate.availableAt?.toISOString() ?? null,
+      failureUpdate.finishedAt?.toISOString() ?? null,
+      toJSON(failureUpdate.error),
+      currentTimeIso,
+      ...this.runningWorkflowRunOwnedParams(params),
+    ) as WorkflowRunRow | undefined;
+    requireRow(row, "mark workflow run failed");
+    const updated = rowToWorkflowRun(row);
+    if (updated.status === "failed") {
+      this.wakeParentWorkflowRun(updated);
+    }
+    return updated;
+  }
+
+  rescheduleWorkflowRunAfterFailedStepAttempt(
+    params: RescheduleWorkflowRunAfterFailedStepAttemptParams,
+  ): Promise<WorkflowRun> {
+    const currentTime = now();
+
+    const stmt = this.db.prepare(`
+      UPDATE "workflow_runs"
+      SET
+        "status" = 'pending',
+        "available_at" = ?,
+        "finished_at" = NULL,
+        "error" = ?,
+        "worker_id" = NULL,
+        "started_at" = NULL,
+        "updated_at" = ?
+      WHERE ${RUNNING_WORKFLOW_RUN_OWNED_WHERE}
+      RETURNING *
+    `);
+
+    const row = stmt.get(
+      toISO(params.availableAt),
+      toJSON(params.error),
+      currentTime,
+      ...this.runningWorkflowRunOwnedParams(params),
+    ) as WorkflowRunRow | undefined;
+    if (!row) {
+      return Promise.reject(
+        new Error(
+          "Failed to reschedule workflow run after failed step attempt",
+        ),
+      );
+    }
+
+    return Promise.resolve(rowToWorkflowRun(row));
+  }
+
+  async cancelWorkflowRun(
+    params: CancelWorkflowRunParams,
+  ): Promise<WorkflowRun> {
+    const currentTime = now();
+
+    const stmt = this.db.prepare(`
+      UPDATE "workflow_runs"
+      SET
+        "status" = 'canceled',
+        "worker_id" = NULL,
+        "available_at" = NULL,
+        "finished_at" = ?,
+        "updated_at" = ?
+      WHERE "namespace_id" = ?
+      AND "id" = ?
+      AND "status" IN ('pending', 'running', 'sleeping')
+    `);
+
+    const result = stmt.run(
+      currentTime,
+      currentTime,
+      this.namespaceId,
+      params.workflowRunId,
+    );
+
+    if (result.changes === 0) {
+      // workflow may already be in a terminal state
+      const existing = await this.getWorkflowRun({
+        workflowRunId: params.workflowRunId,
+      });
+      return resolveCancelWorkflowRunConflict(params.workflowRunId, existing);
+    }
+
+    const updated = await this.getWorkflowRun({
+      workflowRunId: params.workflowRunId,
+    });
+    requireRow(updated, "cancel workflow run");
+
+    this.wakeParentWorkflowRun(updated);
+
+    return updated;
+  }
+
+  /**
+   * Return positional placeholders for {@link RUNNING_WORKFLOW_RUN_OWNED_WHERE}
+   * in the order the fragment expects: namespace, run id, worker id.
+   * @param params - Workflow run identity params
+   * @returns Tuple of placeholder values
+   */
+  private runningWorkflowRunOwnedParams(
+    params: Readonly<{ workflowRunId: string; workerId: string }>,
+  ): [string, string, string] {
+    return [this.namespaceId, params.workflowRunId, params.workerId];
+  }
+
+  /**
+   * Return positional placeholders for {@link RUNNING_STEP_ATTEMPT_OWNED_WHERE}
+   * in the order the fragment expects.
+   * @param params - Step attempt identity params
+   * @returns Tuple of placeholder values
+   */
+  private runningStepAttemptOwnedParams(
+    params: Readonly<{
+      workflowRunId: string;
+      stepAttemptId: string;
+      workerId: string;
+    }>,
+  ): [string, string, string, string, string, string] {
+    return [
+      this.namespaceId,
+      params.workflowRunId,
+      params.stepAttemptId,
+      this.namespaceId,
+      params.workflowRunId,
+      params.workerId,
+    ];
+  }
+
+  private wakeParentWorkflowRun(childWorkflowRun: Readonly<WorkflowRun>): void {
+    if (
+      !childWorkflowRun.parentStepAttemptNamespaceId ||
+      !childWorkflowRun.parentStepAttemptId
+    ) {
+      return;
+    }
+
+    const currentTime = now();
+    const stmt = this.db.prepare(`
+      UPDATE "workflow_runs"
+      SET
+        "available_at" = CASE
+          WHEN "available_at" IS NULL OR "available_at" > ? THEN ?
+          ELSE "available_at"
+        END,
+        "updated_at" = ?
+      WHERE "namespace_id" = ?
+      AND "id" = (
+        SELECT "workflow_run_id"
+        FROM "step_attempts"
+        WHERE "namespace_id" = ?
+        AND "id" = ?
+        AND "kind" = 'workflow'
+        AND "status" = 'running'
+        AND "child_workflow_run_namespace_id" = ?
+        AND "child_workflow_run_id" = ?
+        LIMIT 1
+      )
+      AND (
+        "status" = 'sleeping'
+        OR ("status" = 'running' AND "worker_id" IS NULL)
+      )
+    `);
+
+    stmt.run(
+      currentTime,
+      currentTime,
+      currentTime,
+      childWorkflowRun.parentStepAttemptNamespaceId,
+      childWorkflowRun.parentStepAttemptNamespaceId,
+      childWorkflowRun.parentStepAttemptId,
+      childWorkflowRun.namespaceId,
+      childWorkflowRun.id,
+    );
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async countWorkflowRuns(): Promise<WorkflowRunCounts> {
+    const stmt = this.db.prepare(`
+      SELECT "status", COUNT(*) AS "count"
+      FROM "workflow_runs"
+      WHERE "namespace_id" = ?
+      GROUP BY "status"
+    `);
+
+    const rows = stmt.all(this.namespaceId) as {
+      status: string;
+      count: number;
+    }[];
+    return toWorkflowRunCounts(rows);
+  }
+
+  listWorkflowRuns(
+    params: ListWorkflowRunsParams,
+  ): Promise<PaginatedResponse<WorkflowRun>> {
+    return this.listPaginated(params, {
+      table: "workflow_runs",
+      naturalOrder: "DESC",
+      baseWhere: `"namespace_id" = ?`,
+      baseParams: [this.namespaceId],
+      mapRow: (row) => rowToWorkflowRun(row as WorkflowRunRow),
+    });
+  }
+
+  listStepAttempts(
+    params: ListStepAttemptsParams,
+  ): Promise<PaginatedResponse<StepAttempt>> {
+    return this.listPaginated(params, {
+      table: "step_attempts",
+      naturalOrder: "ASC",
+      baseWhere: `"namespace_id" = ? AND "workflow_run_id" = ?`,
+      baseParams: [this.namespaceId, params.workflowRunId],
+      mapRow: (row) => rowToStepAttempt(row as StepAttemptRow),
+    });
+  }
+
+  /**
+   * Execute a cursor-paginated SELECT against a namespace-scoped table.
+   * `before` reverses the table's natural order, and the cursor comparison
+   * operator follows the effective direction so over-fetched rows line up
+   * with {@link buildPaginatedResponse}'s expectations.
+   * @param params - Pagination params (limit/after/before)
+   * @param options - Query shape
+   * @param options.table - Table name to select from
+   * @param options.naturalOrder - Default sort direction for this table
+   * @param options.baseWhere - WHERE fragment with `?` placeholders
+   * @param options.baseParams - Values for the placeholders in `baseWhere`
+   * @param options.mapRow - Convert a raw row to the domain type
+   * @returns Paginated response
+   */
+  private listPaginated<T extends Cursor>(
+    params: Readonly<{ after?: string; before?: string; limit?: number }>,
+    options: {
+      readonly table: string;
+      readonly naturalOrder: "ASC" | "DESC";
+      readonly baseWhere: string;
+      readonly baseParams: readonly unknown[];
+      readonly mapRow: (row: unknown) => T;
+    },
+  ): Promise<PaginatedResponse<T>> {
+    const limit = params.limit ?? DEFAULT_PAGINATION_PAGE_SIZE;
+    const { after, before } = params;
+    const cursor = decodeListCursor(params);
+
+    const reversedOrder = options.naturalOrder === "ASC" ? "DESC" : "ASC";
+    const effectiveOrder = before ? reversedOrder : options.naturalOrder;
+    const cursorOp = effectiveOrder === "ASC" ? ">" : "<";
+
+    const whereClause = cursor
+      ? `${options.baseWhere} AND ("created_at", "id") ${cursorOp} (?, ?)`
+      : options.baseWhere;
+    const queryParams: unknown[] = [
+      ...options.baseParams,
+      ...(cursor ? [cursor.createdAt.toISOString(), cursor.id] : []),
+      limit + 1,
+    ];
+
+    const query = `
+      SELECT *
+      FROM "${options.table}"
+      WHERE ${whereClause}
+      ORDER BY "created_at" ${effectiveOrder}, "id" ${effectiveOrder}
+      LIMIT ?
+    `;
+
+    const rawRows = this.db.prepare(query).all(...queryParams);
+    const rows = rawRows.map((row) => options.mapRow(row));
+
+    return Promise.resolve(
+      buildPaginatedResponse(rows, limit, !!after, !!before),
+    );
+  }
+
+  async createStepAttempt(
+    params: CreateStepAttemptParams,
+  ): Promise<StepAttempt> {
+    const id = generateUUID();
+    const currentTime = now();
+
+    const stmt = this.db.prepare(`
+      INSERT INTO "step_attempts" (
+        "namespace_id",
+        "id",
+        "workflow_run_id",
+        "step_name",
+        "kind",
+        "status",
+        "config",
+        "context",
+        "started_at",
+        "created_at",
+        "updated_at"
+      )
+      VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)
+      RETURNING *
+    `);
+
+    const row = stmt.get(
+      this.namespaceId,
+      id,
+      params.workflowRunId,
+      params.stepName,
+      params.kind,
+      toJSON(params.config),
+      toJSON(params.context),
+      currentTime,
+      currentTime,
+      currentTime,
+    ) as StepAttemptRow | undefined;
+    requireRow(row, "create step attempt");
+
+    return await Promise.resolve(rowToStepAttempt(row));
+  }
+
+  async setStepAttemptChildWorkflowRun(
+    params: SetStepAttemptChildWorkflowRunParams,
+  ): Promise<StepAttempt> {
+    const currentTime = now();
+
+    const stmt = this.db.prepare(`
+      UPDATE "step_attempts"
+      SET
+        "child_workflow_run_namespace_id" = ?,
+        "child_workflow_run_id" = ?,
+        "updated_at" = ?
+      WHERE ${RUNNING_STEP_ATTEMPT_OWNED_WHERE}
+      RETURNING *
+    `);
+
+    const row = stmt.get(
+      params.childWorkflowRunNamespaceId,
+      params.childWorkflowRunId,
+      currentTime,
+      ...this.runningStepAttemptOwnedParams(params),
+    ) as StepAttemptRow | undefined;
+    requireRow(row, "set step attempt child workflow run");
+
+    return await Promise.resolve(rowToStepAttempt(row));
+  }
+
+  getStepAttempt(params: GetStepAttemptParams): Promise<StepAttempt | null> {
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM "step_attempts"
+      WHERE "namespace_id" = ? AND "id" = ?
+      LIMIT 1
+    `);
+
+    const row = stmt.get(this.namespaceId, params.stepAttemptId) as
+      | StepAttemptRow
+      | undefined;
+
+    return Promise.resolve(row ? rowToStepAttempt(row) : null);
+  }
+
+  async completeStepAttempt(
+    params: CompleteStepAttemptParams,
+  ): Promise<StepAttempt> {
+    const currentTime = now();
+
+    const stmt = this.db.prepare(`
+      UPDATE "step_attempts"
+      SET
+        "status" = 'completed',
+        "output" = ?,
+        "error" = NULL,
+        "finished_at" = ?,
+        "updated_at" = ?
+      WHERE ${RUNNING_STEP_ATTEMPT_OWNED_WHERE}
+      RETURNING *
+    `);
+
+    const row = stmt.get(
+      toJSON(params.output),
+      currentTime,
+      currentTime,
+      ...this.runningStepAttemptOwnedParams(params),
+    ) as StepAttemptRow | undefined;
+    requireRow(row, "mark step attempt completed");
+
+    return await Promise.resolve(rowToStepAttempt(row));
+  }
+
+  async failStepAttempt(params: FailStepAttemptParams): Promise<StepAttempt> {
+    const currentTime = now();
+
+    const stmt = this.db.prepare(`
+      UPDATE "step_attempts"
+      SET
+        "status" = 'failed',
+        "output" = NULL,
+        "error" = ?,
+        "finished_at" = ?,
+        "updated_at" = ?
+      WHERE ${RUNNING_STEP_ATTEMPT_OWNED_WHERE}
+      RETURNING *
+    `);
+
+    const row = stmt.get(
+      toJSON(params.error),
+      currentTime,
+      currentTime,
+      ...this.runningStepAttemptOwnedParams(params),
+    ) as StepAttemptRow | undefined;
+    requireRow(row, "mark step attempt failed");
+
+    return await Promise.resolve(rowToStepAttempt(row));
+  }
+}
+
+// Row types for SQLite results
+interface WorkflowRunRow {
+  namespace_id: string;
+  id: string;
+  workflow_name: string;
+  version: string | null;
+  status: string;
+  idempotency_key: string | null;
+  config: string;
+  context: string | null;
+  input: string | null;
+  output: string | null;
+  error: string | null;
+  attempts: number;
+  parent_step_attempt_namespace_id: string | null;
+  parent_step_attempt_id: string | null;
+  worker_id: string | null;
+  available_at: string | null;
+  deadline_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface StepAttemptRow {
+  namespace_id: string;
+  id: string;
+  workflow_run_id: string;
+  step_name: string;
+  kind: string;
+  status: string;
+  config: string;
+  context: string | null;
+  output: string | null;
+  error: string | null;
+  child_workflow_run_namespace_id: string | null;
+  child_workflow_run_id: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Conversion functions
+/**
+ * Parse and validate the `created_at`, `updated_at`, and `config` fields
+ * shared by workflow run and step attempt rows.
+ * @param row - Row with timestamp and config columns
+ * @returns Parsed createdAt/updatedAt dates and decoded config
+ * @throws {Error} If any required field is missing
+ */
+function parseRequiredRowFields(
+  row: Readonly<{ created_at: string; updated_at: string; config: string }>,
+): { createdAt: Date; updatedAt: Date; config: unknown } {
+  const createdAt = fromISO(row.created_at);
+  const updatedAt = fromISO(row.updated_at);
+  const config = fromJSON(row.config);
+
+  if (!createdAt) throw new Error("createdAt is required");
+  if (!updatedAt) throw new Error("updatedAt is required");
+  if (config === null) throw new Error("config is required");
+
+  return { createdAt, updatedAt, config };
+}
+
+/**
+ * Convert a database row to a WorkflowRun.
+ * @param row - Workflow run row
+ * @returns Workflow run
+ * @throws {Error} If required fields are missing
+ */
+function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
+  const { createdAt, updatedAt, config } = parseRequiredRowFields(row);
+
+  return {
+    namespaceId: row.namespace_id,
+    id: row.id,
+    workflowName: row.workflow_name,
+    version: row.version,
+    status: row.status as WorkflowRun["status"],
+    idempotencyKey: row.idempotency_key,
+    config: config as WorkflowRun["config"],
+    context: fromJSON(row.context) as WorkflowRun["context"],
+    input: fromJSON(row.input) as WorkflowRun["input"],
+    output: fromJSON(row.output) as WorkflowRun["output"],
+    error: fromJSON(row.error) as WorkflowRun["error"],
+    attempts: row.attempts,
+    parentStepAttemptNamespaceId: row.parent_step_attempt_namespace_id,
+    parentStepAttemptId: row.parent_step_attempt_id,
+    workerId: row.worker_id,
+    availableAt: fromISO(row.available_at),
+    deadlineAt: fromISO(row.deadline_at),
+    startedAt: fromISO(row.started_at),
+    finishedAt: fromISO(row.finished_at),
+    createdAt,
+    updatedAt,
+  };
+}
+
+/**
+ * Convert a database row to a StepAttempt.
+ * @param row - Step attempt row
+ * @returns Step attempt
+ * @throws {Error} If required fields are missing
+ */
+function rowToStepAttempt(row: StepAttemptRow): StepAttempt {
+  const { createdAt, updatedAt, config } = parseRequiredRowFields(row);
+
+  return {
+    namespaceId: row.namespace_id,
+    id: row.id,
+    workflowRunId: row.workflow_run_id,
+    stepName: row.step_name,
+    kind: row.kind as StepAttempt["kind"],
+    status: row.status as StepAttempt["status"],
+    config: config as StepAttempt["config"],
+    context: fromJSON(row.context) as StepAttempt["context"],
+    output: fromJSON(row.output) as StepAttempt["output"],
+    error: fromJSON(row.error) as StepAttempt["error"],
+    childWorkflowRunNamespaceId: row.child_workflow_run_namespace_id,
+    childWorkflowRunId: row.child_workflow_run_id,
+    startedAt: fromISO(row.started_at),
+    finishedAt: fromISO(row.finished_at),
+    createdAt,
+    updatedAt,
+  };
+}

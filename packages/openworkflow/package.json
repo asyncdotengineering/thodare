@@ -1,0 +1,89 @@
+{
+  "name": "@thodare/openworkflow",
+  "version": "0.9.0",
+  "description": "Vendored fork of openworkflow (Apache-2.0). Durable, resumable workflows on Postgres / SQLite. See UPSTREAM.md for the relationship to upstream openworkflow.",
+  "keywords": [
+    "thodare",
+    "openworkflow",
+    "durable-execution",
+    "durable-function",
+    "durable-workflow",
+    "postgresql",
+    "resumable",
+    "task-orchestration",
+    "typescript"
+  ],
+  "homepage": "https://thodare.dev",
+  "bugs": "https://github.com/asyncdotengineering/thodare/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asyncdotengineering/thodare.git",
+    "directory": "packages/openworkflow"
+  },
+  "license": "Apache-2.0",
+  "author": "OpenWorkflow (original) + asyncdotengineering (vendor)",
+  "contributors": [
+    "OpenWorkflow team — see https://github.com/openworkflowdev/openworkflow",
+    "asyncdotengineering — vendor + Thodare-specific patches"
+  ],
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./internal": "./internal.ts",
+    "./postgres": "./postgres.ts",
+    "./sqlite": "./sqlite.ts"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./internal": {
+        "types": "./dist/internal.d.ts",
+        "default": "./dist/internal.js"
+      },
+      "./postgres": {
+        "types": "./dist/postgres.d.ts",
+        "default": "./dist/postgres.js"
+      },
+      "./sqlite": {
+        "types": "./dist/sqlite.d.ts",
+        "default": "./dist/sqlite.js"
+      }
+    },
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE.md",
+    "UPSTREAM.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "prepublishOnly": "rm -rf dist && tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "^22.0.5",
+    "@tsconfig/strictest": "^2.0.8",
+    "@types/node": "^22.13.5",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "postgres": "^3.4.9"
+  },
+  "peerDependenciesMeta": {
+    "postgres": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

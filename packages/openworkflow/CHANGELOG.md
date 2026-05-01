@@ -1,0 +1,141 @@
+# openworkflow
+
+## 0.9.0
+
+- Add name-addressed workflow signals: `step.waitForSignal()`,
+  `step.sendSignal()`, and `ow.sendSignal()` (#400)
+
+## 0.8.1
+
+- Fix Postgres key transformation to only camel-case column names, preserving
+  JSON value object keys in workflow inputs (#368)
+
+## 0.8.0
+
+- Add child workflow support with `step.runWorkflow` (#342, #349)
+- Add auto-indexing for duplicate step names (#344)
+- Various backend query improvements
+- Enforce a hard cap of 1000 step attempts per workflow run (#343)
+- Park workflow runs in `running` instead of legacy `sleeping` status (#347)
+- Fix invoke race handling for parked parent workflows and parent wakeups
+- Fix replay and parallel execution edge cases around retries and parked waits
+- Fix stale-write and worker-claim race conditions in workflow run transitions
+- Fix deadline-exceeded retry computation and workflow completion timeout logic
+
+## 0.7.3
+
+- Add `run` metadata to workflows
+
+## 0.7.2
+
+- Add `cancelWorkflowRun` to client so runs can be canceled without a handle
+  (thanks @octoper!)
+
+## 0.7.1
+
+- Fix hardcoded schema in Postgres reschedule query (thanks @thomasjiangcy)
+- Fix to prevent workflows retrying indefinitely on default policies
+- Unbounded retries are still supported by setting `retryPolicy.maximumAttempts`
+  to `Infinity` or 0
+- Unregistered workflows are still rescheduled infinitely with backoff instead
+  of failing terminally so runs survive long rolling deploys
+
+## 0.7.0
+
+- Add configurable workflow and step retry policies (#279, #294)
+- Add workflow-scoped idempotency keys (#287)
+  `ow.runWorkflow(spec, input, { idempotencyKey })`
+- Switch worker polling to exponential backoff with jitter (#263)
+- Add support for custom database schemas (#293) (thanks @thomasjiangcy)
+
+## 0.6.7
+
+- Add support for Bun as an alternative to Node
+
+## 0.6.6
+
+- Reverts and deprecates 0.6.5
+
+## 0.6.5
+
+- Add support for Bun as an alternative to Node
+
+## 0.6.4
+
+- Added support for scheduling workflow runs with a `Date` or duration string
+  See https://openworkflow.dev/docs/workflows#scheduling-a-workflow-run
+
+## 0.6.3
+
+- Export the full Backend interface for third-party backends
+
+## 0.6.2
+
+- Fix pnpx (pnpm dlx) `ERR_PNPM_DLX_MULTIPLE_BINS`
+  - This removes the undocumented/unused openworkflow -> @openworkflow/cli shim
+
+## 0.6.1
+
+- Exclude test and build files from published package
+
+## 0.6.0
+
+- Added `openworkflow/postgres` and `openworkflow/sqlite` entrypoints for
+  backends. The `@openworkflow/backend-postgres` and
+  `@openworkflow/backend-sqlite` packages remain as compatibility shims.
+- Changed the `postgres` driver to be an optional peer dependency. Install it
+  separately when using the PostgreSQL backend.
+
+## 0.5.0
+
+- **New Tooling:** Introduced the OpenWorkflow CLI (`@openworkflow/cli`) for
+  easier project management.
+- Added `defineWorkflowSpec` for declarative workflow definitions. This allows
+  you to define the shape of a workflow (input/output types, name, schema)
+  separately from its implementation.
+- Added `deadlineAt` option to workflow definitions. This allows workflows to
+  automatically fail if they exceed a specific duration (Thanks
+  @Shobhit-Nagpal).
+
+## 0.4.1
+
+- Add SQLite backend (`@openworkflow/backend-sqlite`) using `node:sqlite`
+  (requires Node.js 22+). This is now the recommended backend for non-production
+  environments (@nathancahill)
+- Add `declareWorkflow` and `implementWorkflow` APIs to separate workflow
+  definitions from their implementation logic for tree-shaking
+- Fix execution logic when running multiple versions of the same workflow on a
+  single worker
+- A reusable test suite (`@openworkflow/backend-test`) is now available for
+  contributors building custom backend adapters. See the Postgres and SQLite
+  backends for example usage.
+
+## 0.4.0
+
+- Add schema validation, compatible with over a dozen validators like Zod,
+  Valibot, ArkType, and more. [Supported
+  validators](https://standardschema.dev/#what-schema-libraries-implement-the-spec).
+  (@mariusflorescu)
+- Improve performance when replaying workflows with over 200 steps
+- Deprecate `succeeded` status in favor of `completed` (backward compatible)
+
+And for custom backend implementations:
+
+- Add pagination to `listStepAttempts`
+- Rename `Backend` methods to be verb-first (e.g. `markWorkflowRunFailed` →
+  `failWorkflowRun`) and add `listWorkflowRuns`
+
+## 0.3.0
+
+- Added workflow versioning to help evolve workflows safely over time.
+- Added workflow cancellation so running workflows can now be canceled safely.
+- Improved duration handling and TypeScript type-safety for duration strings.
+- Fix for edge case where finished workflow runs could be slept.
+
+## 0.2.0
+
+- Sleep workflows with `step.sleep(name, duration)`
+
+## 0.1.0
+
+- Initial release
