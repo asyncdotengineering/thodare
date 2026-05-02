@@ -60,6 +60,18 @@ If the credential is not found, the block fails with
 connector's declared `credential.type`, it fails with
 `credential_type_mismatch`.
 
+## Operational caveats
+
+- **Master-key rotation is not automatic.** Existing `encrypted_secret`
+  blobs are bound to the master key in effect at encrypt time. Rotating
+  `THODARE_CREDENTIALS_MASTER_KEY` does NOT re-encrypt prior rows —
+  decrypts will fail with the new key. A migration path
+  (re-encrypt-on-read or batch re-encrypt) is a v1.1 follow-up.
+- **Boot policy.** If neither `opts.credentialsMasterKey` nor the env
+  var is set, the `/api/credentials` route is not mounted (deployments
+  that don't use credentials do not need to provide a key). If a key
+  is provided but is the wrong length, the API fails fast at boot.
+
 ## Related
 
 - [Manage credentials](/how-to/manage-credentials) — step-by-step guide.

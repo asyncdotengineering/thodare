@@ -7,6 +7,12 @@ const AUTH_TAG_LENGTH = 16;
 const KEY_LENGTH = 32;
 
 export function deriveOrgKey(masterKey: Uint8Array, organizationId: string): Uint8Array {
+  // Defense-in-depth: HKDF accepts any IKM length, but Thodare requires
+  // exactly 32 bytes so weak keys (e.g., 16-byte cuts) cannot flow through
+  // even if a caller bypasses the boot validation in server.ts.
+  if (masterKey.length !== KEY_LENGTH) {
+    throw new Error(`masterKey must be ${KEY_LENGTH} bytes, got ${masterKey.length}`);
+  }
   const salt = Buffer.from(organizationId, "utf8");
   const info = Buffer.from(HKDF_INFO, "ascii");
   return new Uint8Array(hkdfSync("sha256", masterKey, salt, info, KEY_LENGTH));

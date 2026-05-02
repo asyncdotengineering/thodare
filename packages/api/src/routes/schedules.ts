@@ -111,7 +111,11 @@ export function createAdminRouter(opts: {
           const row = await opts.workflows.getInternalUnscoped(workflowId);
           if (!row) throw new Error(`workflow ${workflowId} not found`);
           const handle = await opts.runtimeHost.runtime.run(
-            { workflow: row.workflow, input },
+            {
+              workflow: row.workflow,
+              input,
+              organizationId: row.organizationId,
+            },
             runOpts,
           );
           return { workflowRun: { id: handle.id } };

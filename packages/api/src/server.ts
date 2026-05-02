@@ -62,8 +62,16 @@ const HEALTH_PATH = "/health";
 export async function createControlPlaneApi(
   opts: CreateControlPlaneApiOptions,
 ): Promise<ControlPlaneApi> {
-  // 0. Resolve the credentials master key.
+  // 0. Resolve the credentials master key. Both the programmatic
+  // (`opts.credentialsMasterKey`) and env (`THODARE_CREDENTIALS_MASTER_KEY`)
+  // paths are length-validated; an invalid key fails fast at boot rather
+  // than silently producing weak ciphertexts at first use.
   let masterKey: Uint8Array | undefined = opts.credentialsMasterKey;
+  if (masterKey && masterKey.length !== 32) {
+    throw new Error(
+      `opts.credentialsMasterKey must be exactly 32 bytes, got ${masterKey.length}`,
+    );
+  }
   if (!masterKey && process.env["THODARE_CREDENTIALS_MASTER_KEY"]) {
     const buf = Buffer.from(process.env["THODARE_CREDENTIALS_MASTER_KEY"]!, "base64");
     if (buf.length !== 32) {
