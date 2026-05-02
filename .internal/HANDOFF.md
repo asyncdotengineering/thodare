@@ -2,9 +2,9 @@
 
 > **Audience:** the next Claude Code (or human) session that opens this repo.
 > **Purpose:** ship the next feature without re-deriving everything we already decided.
-> **Last update:** 2026-05-02 (after Phase N — docs Diataxis restructure + apps/docs move + examples workspace).
+> **Last update:** 2026-05-02 (after the v1 design phase — Backend abstraction proposal + 4 use cases + RELEASE.md + AGENTS.md rename).
 
-If you read nothing else, read this file plus [`../SPEC.md`](../SPEC.md).
+If you read nothing else, read this file plus [`../AGENTS.md`](../AGENTS.md), [`../SPEC.md`](../SPEC.md), and [`../research/backend-abstraction-proposal.md`](../research/backend-abstraction-proposal.md). The proposal is what v1 ships.
 
 ---
 
@@ -39,7 +39,13 @@ The **load-bearing decision document** is [`../SPEC.md`](../SPEC.md)
 | **Marketing redirects** | https://asyncdot.com/thodare → repo · https://asyncdot.com/thodare-docs → docs (Vercel `vercel.json` of the `asyncdot-marketing` project) |
 | **npm packages** | https://www.npmjs.com/search?q=%40thodare — 4 published at `0.1.x` (`engine`, `api@0.1.1`, `cli`, `openworkflow`) |
 | **Local Postgres for tests** | `postgres://localhost:5432/wfkit_durable_test` — `createdb wfkit_durable_test`. Per-test schemas, dropped on teardown. |
-| **Spec / source of truth** | [`../SPEC.md`](../SPEC.md) — the v0 spec (T1–T19). Treat as immutable for v0; propose edits via RFC for v1+. |
+| **Spec / source of truth (v0)** | [`../SPEC.md`](../SPEC.md) — the v0 spec (T1–T19). Treat as immutable for v0; preserved verbatim through v1. |
+| **v1 design — Backend abstraction proposal** | [`../research/backend-abstraction-proposal.md`](../research/backend-abstraction-proposal.md) — ~13k words. The v1 release. Interface signatures, capability flags, 6 phases with LoC estimates. **This is what v1 ships.** |
+| **v1 DX walkthrough — 5 personas** | [`../research/developer-blueprint.md`](../research/developer-blueprint.md) — what the v1 surface looks like in practice. |
+| **v1 use cases — 4 product shapes** | [`../usecases/`](../usecases/) — notification, sales-funnel, marketing-automation, dag-workflow-builder. Each with founder POV + end-user POV + deployment recommendation. |
+| **Code-review evidence base (10 deep reviews)** | [`../research/code-reviews/`](../research/code-reviews/) — WDK, Cloudflare dynamic-workflows, workflow-examples, workflow-builder-template, Flue, Rivet, visual-builder substrates (n8n / ActivePieces / Sim Studio), Encore.ts, iii.dev, Kapso. Source-cited; cited from the proposal for every architectural claim. |
+| **Release discipline (Alpha → GA)** | [`../RELEASE.md`](../RELEASE.md) — promotion ladder, pre-merge gates, versioning policy. Solo-dogfood-no-customers right-sized. |
+| **Repo guidance for AI agents** | [`../AGENTS.md`](../AGENTS.md) — vendor-neutral; Claude Code reads this via `CLAUDE.md → @AGENTS.md`. |
 | **Publishing runbook** | [`../publishing-doc.md`](../publishing-doc.md) — read before any release |
 | **Image asset** | `apps/docs/public/thodare-mascot.png` + `apps/docs/src/assets/thodare-mascot.png`. Generated via fal.ai (Flux Schnell) in [Phase F](../rfcs/). |
 | **Marketing repo** | `/Users/mithushancj/Documents/asyncdot/marketing/asyncdot-ai-native-website` — has the `/thodare` + `/thodare-docs` redirects in `vercel.json` |
@@ -51,13 +57,28 @@ The **load-bearing decision document** is [`../SPEC.md`](../SPEC.md)
 
 | | |
 |---|---|
-| Version | `@thodare/api@0.1.1`, others `@0.1.0` (alpha) |
+| Version (shipped) | `@thodare/api@0.1.1`, others `@0.1.0` (alpha) — unchanged from v0 |
+| **Version (next)** | **`1.0.0-alpha.N` → `1.0.0`** per `../RELEASE.md`. Backend abstraction is the v1 release. |
 | Packages published | 4 (`@thodare/engine`, `@thodare/api`, `@thodare/cli`, `@thodare/openworkflow`) |
 | Build | `pnpm -r run build` → all green |
-| Tests | `pnpm test` → **209 across 41 test files** (117 engine + 56 api + 36 cli) |
+| Tests | `pnpm test` → **209 across 41 test files** (117 engine + 56 api + 36 cli) — v1 adds the contract test suite (~37 new tests across 6 packs) |
 | Docs site | 31 pages, Diataxis quadrants, deployed to GH Pages |
 | Repo stars | 1 (octalpixel) |
-| Open issues / PRs | 0 (alpha; no contributors yet) |
+| Open issues / PRs | 0 (alpha; solo-dogfood-no-customers — see `../RELEASE.md`) |
+
+### v1 work in flight (designed, not yet implemented)
+
+The `research/backend-abstraction-proposal.md` (~13k words) is **the v1 release**. Architectural design done; implementation has not started. Six phases:
+
+- **Phase 1 (~1.5w)** — `packages/backend/` (pure types) + `packages/backend-contract-tests/` (parameterized vitest suite). Ship the contract first; second adapter validates.
+- **Phase 2 (~1.5w)** — Credentials primitive (`packages/engine/src/credentials/` + `packages/api/src/routes/credentials.ts` + `workflow.credentials` table + AES-256-GCM at rest).
+- **Phase 3 (~1w)** — Extract the openworkflow adapter (`packages/backend-openworkflow-pg/` + `packages/backend-openworkflow-sqlite/`). Backward-compatible.
+- **Phase 4 (~1.5w)** — Second adapter (`packages/backend-cloudflare-dynamic/`, ~150 LoC). Proves the abstraction.
+- **Phase 5 (~4w)** — Platform-native backends (`backend-vercel`, `backend-aws`) + `examples/headless-ui-demo/`.
+- **Phase 5b (~3w, parallelizable)** — Six v1 design closures: container blocks (§3.10), output `hiddenFromDisplay` + `paramVisibility: 'llm-only'` (§3.11), dynamic schema endpoint (§3.12), timezone-aware waits (§3.13), diff→ops endpoint (§3.14), `@thodare/router` companion package (§4.8). Plus 5 first-party connector packages (`@thodare/connector-{slack,resend,github,stripe,google-sheets}`) shipping ActivePieces-style.
+- **Phase 6 (post-1.0)** — Deprecate legacy `createWfkit({ backend: BackendPostgres })`. Migration codemod.
+
+**Marketplace primitive (per-org installed registry + sandboxed custom-connector execution) is HELD to v1.1+** per `next-up.md`. v1 ships first-party connectors as plain npm packages.
 
 ### What v0 already shipped
 
@@ -312,48 +333,64 @@ mascot was generated this way. Don't rely on it for production work
 
 ## 8. What I would do next if I were continuing
 
-If you want a fast win that demonstrates real value, ship one of
-these in order of leverage:
+**Start Phase 1 of the Backend abstraction proposal.** Everything else (Tier 1 fast-wins from `next-up.md`, second adapters, marketplace) waits behind this — Phase 1 is the gating dependency for v1.
 
-1. **`thodare workflow {list,get,run,logs}`** (~1 day) — extend the
-   CLI now that auth is rock-solid. Pure CLI work; all the API routes
-   already exist. Big UX win for first-time users.
-2. **`@thodare/telemetry-otel`** (~1 day) — concrete `withTracing`
-   hooks that wire OTel. The engine already exposes the Proxy; this
-   is just a recipe package + a doc.
-3. **Production scheduler** (~2 days) — a separate process that
-   ticks on a real interval, replacing `/api/admin/tick` for production.
-   The `tryClaim` row-lock is already in place; just need a tiny
-   `setInterval(60_000)` loop with backoff.
-4. **GitHub Actions release workflow** (~1 day) — replace manual
-   `pnpm publish`, use OIDC for npm provenance.
-5. **Org deletion + cascade** (~2 days) — better-auth org delete
-   currently leaves orphaned workflows + schedules + keys. Add a
-   `databaseHooks.organization.delete.before` that refuses if
-   non-empty (or, with a `--force` flag, cascades).
+### Phase 1 — concrete steps (~1.5 weeks)
 
-For each, see [`next-up.md`](./next-up.md) for the prioritized full
-queue with package names, LoC estimates, and dependencies.
+1. `git checkout -b backend-abstraction-phase-1`
+2. **`packages/backend/`** — pure types + zero runtime. Translate `research/backend-abstraction-proposal.md` §3.1 into TS:
+   - `ThodareBackend` interface (extends `Storage`, `Queue`, `Streamer`)
+   - `BackendCapabilities` interface (~17 flags)
+   - `ThodareStep` interface (`run`, `sleep`, `sleepUntilLocalTime` per §3.13, `waitForSignal`, `getWriter`)
+   - `ThodareCtx` interface
+   - Branded `SpecVersion` constants (per §3.4 — lift WDK pattern verbatim)
+   - Re-export Zod schemas for every event / payload shape
+3. **`packages/backend-contract-tests/`** — parameterized vitest suite. Translate proposal §3.7 test packs #1–37:
+   - `runContractTests(backend, options?)` is the only export
+   - Test packs gated by capability flags (skip when `supportsX === false`)
+   - Mode-specific packs (`Queue.mode === "push" | "pull" | "embedded"`)
+4. **No runtime yet.** Phase 1 ships ONLY types + tests. Phase 3 wraps openworkflow into the first concrete adapter.
+5. **Pre-merge gates** (per `RELEASE.md`): `pnpm test` green, `tsc --noEmit` clean, Changeset added (`pnpm changeset` — bump `@thodare/backend@1.0.0-alpha.1`), docs page drafted in the right Diataxis quadrant.
+6. Merge to main → `pnpm publish --tag alpha` → live on npm under the `alpha` dist-tag. **You are the first user.** `npm install @thodare/backend@alpha` from a scratch directory; play with the types; verify they feel right.
 
-**Trust the SPEC**; don't redesign.
+### Why this order
+
+- The contract suite anchors the abstraction in executable form. Without it, "Backend abstraction" is essay.
+- Shipping types-only is reversible. The `@thodare/backend@1.0.0-alpha.1` tag stays on `alpha`; if the interface shape needs to evolve in Phase 2, bump `alpha.2` and document the change.
+- Phase 3 (extract openworkflow as first adapter) is the proof point — once a real adapter passes contract tests, the abstraction is real.
+
+### What's deliberately NOT first
+
+- Tier 1 fast-wins from `next-up.md` (`thodare workflow` CLI commands, `@thodare/telemetry-otel`, etc.) — useful but not gating; they slot in opportunistically alongside the v1 phases.
+- Marketplace primitive — held to v1.1+ per `next-up.md`. Don't be tempted.
+- Any feature flag gating — explicitly rejected in `RELEASE.md`. Capability flags (interface declarations) ARE the answer; runtime feature flags ARE NOT.
+
+**Trust the proposal**; don't redesign. If you find yourself contradicting `research/backend-abstraction-proposal.md` §3 or §4, stop and re-read it before writing code.
 
 ---
 
 ## 9. What NOT to do
 
-- Don't break the patch-loop contract (T2). 400 on first bad op
-  defeats the LLM-feedable surface.
-- Don't break `hidden()` (T3). Exposing a "debug" route that shows
-  hidden params is a security regression.
-- Don't break tenant scoping (T11). New routes go through the auth
-  guard; new tables carry `organization_id`.
-- Don't fork upstream openworkflow. Vendor is the contract; patches
-  go in `UPSTREAM.md` with commits.
+### Inherited from v0 (still load-bearing)
+
+- Don't break the patch-loop contract (T2). 400 on first bad op defeats the LLM-feedable surface.
+- Don't break `hidden()` (T3). Exposing a "debug" route that shows hidden params is a security regression.
+- Don't break tenant scoping (T11). New routes go through the auth guard; new tables carry `organization_id`.
+- Don't fork upstream openworkflow. Vendor is the contract; patches go in `UPSTREAM.md` with commits.
 - Don't add `as any` or `@ts-ignore`. The strictness is a feature.
 - Don't push to `main`. PR-only.
 - Don't publish without reading [`../publishing-doc.md`](../publishing-doc.md).
-- Don't add a no-code dashboard. Build it on top; we ship the
-  surface a UI builds on.
+- Don't add a no-code dashboard. Build it on top; we ship the surface a UI builds on.
+
+### New for v1 (per the proposal + RELEASE.md)
+
+- **Don't add per-feature env-var gates** like `THODARE_FEATURES_X=enabled`. `RELEASE.md` explicitly rejects feature-flag gating discipline. Capability flags (`BackendCapabilities` per proposal §3) ARE NOT feature flags — they're interface declarations the adapter exposes. Don't conflate.
+- **Don't reintroduce v0.X versioning labels** (`v0.2 / v0.3+` in the proposal). The corrected versioning is `1.0.0-alpha.N → 1.0.0 → 1.x.y → 2.0.0`. The earlier draft labels are obsolete.
+- **Don't ship the marketplace primitive in v1.0.** It's deferred to v1.1+ per `next-up.md`. v1 ships first-party connectors as plain `@thodare/connector-*` npm packages (ActivePieces-style), without per-org installed registries or sandboxed execution.
+- **Don't write a separate RFC for v1.** The proposal at `research/backend-abstraction-proposal.md` IS the RFC. Solo + dogfood + no contributors means a parallel RFC is paperwork without leverage. When the project picks up a second contributor, that's the moment to layer in the RFC ceremony.
+- **Don't touch the vendored `@thodare/openworkflow` package** beyond syncing from upstream. It stays. The new `@thodare/backend-openworkflow-pg` + `@thodare/backend-openworkflow-sqlite` adapters WRAP it — they don't replace it.
+- **Don't break wire-format canonicality** (proposal §3.10). Every API response, every workflow JSON, every EditOp batch result must be sorted-keys + minimal-escape JSON.
+- **Don't bypass the `@thodare/backend-contract-tests` suite.** Every adapter PR must pass; new features add new test packs. The suite is the cross-adapter parity gate.
 
 ---
 
@@ -400,8 +437,6 @@ workflow, tenant scoping, persistent schedule claim) are **not**
 alpha — they are the bet. Every other surface can move; those
 should not.
 
-When in doubt, re-read [`../SPEC.md`](../SPEC.md) §3 (T1–T19). If
-you're about to make a decision that contradicts one of them, **stop
-and write an RFC instead**.
+When in doubt, re-read [`../SPEC.md`](../SPEC.md) §3 (T1–T19) AND [`../research/backend-abstraction-proposal.md`](../research/backend-abstraction-proposal.md) §3 + §4. If you're about to make a decision that contradicts either, **stop and ask first** (the proposal IS the RFC; SPEC.md is the v0 constitution).
 
-— last session, 2026-05-02
+— last session, 2026-05-02 (v1 design phase complete; Phase 1 not yet started)
