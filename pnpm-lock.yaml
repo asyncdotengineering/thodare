@@ -30,27 +30,6 @@ importers:
         specifier: ^0.34.0
         version: 0.34.5
 
-  examples/full-llm-loop:
-    devDependencies:
-      '@thodare/api':
-        specifier: workspace:*
-        version: link:../../packages/api
-      '@thodare/engine':
-        specifier: workspace:*
-        version: link:../../packages/engine
-      '@thodare/openworkflow':
-        specifier: workspace:*
-        version: link:../../packages/openworkflow
-      postgres:
-        specifier: ^3.4.9
-        version: 3.4.9
-      tsx:
-        specifier: ^4.19.0
-        version: 4.21.0
-      zod:
-        specifier: ^3.23.8
-        version: 3.25.76
-
   examples/hello-connector:
     devDependencies:
       '@thodare/engine':

@@ -192,7 +192,6 @@ HTTP request
 
 Examples:
 - `@thodare-examples/hello-connector` — minimal in-memory engine demo
-- `@thodare-examples/full-llm-loop` — full HTTP control-plane demo
 
 ## §6 What v0 already shipped
 

@@ -5,8 +5,8 @@
  * workflow programmatically (no LLM, no API, no Postgres), runs it
  * in-memory, prints the output.
  *
- * If you want the full HTTP control plane + LLM repair loop, see
- * `examples/full-llm-loop` instead.
+ * If you want the full HTTP control plane + LLM repair loop, read
+ * `packages/api/tests/02.patch-endpoint.test.ts`.
  */
 
 import { z } from "zod";

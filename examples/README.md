@@ -6,7 +6,11 @@ Runnable examples for Thodare. Each is a separate workspace package
 | Example | What it shows |
 |---|---|
 | [`hello-connector`](./hello-connector/) | The minimum: 2 connectors, 1 workflow, in-memory execution. ~30 LoC. |
-| [`full-llm-loop`](./full-llm-loop/) | End-to-end: boot `@thodare/api`, sign up, mint a key, patch a workflow with intentional mistakes, fix it, run it. The executable form of the [Build your first workflow](https://asyncdotengineering.github.io/thodare/tutorials/first-workflow/) tutorial. |
+
+For the end-to-end LLM patch loop against a fully-authed `@thodare/api`,
+see [`packages/api/tests/02.patch-endpoint.test.ts`](../packages/api/tests/02.patch-endpoint.test.ts) — the executable
+spec for the skip-don't-reject contract, with the canonical bootstrap
++ org + API-key flow.
 
 ## Run any example
 

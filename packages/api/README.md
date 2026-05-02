@@ -108,12 +108,9 @@ RUNID=$(echo "$RUN" | jq -r .runId)
 curl -s "$URL/api/runs/$RUNID" -H "$H" | jq '{state, output}'
 ```
 
-Or run the same loop programmatically (with a per-run Postgres schema and
-auto-cleanup) — see [`examples/full-llm-loop.ts`](./examples/full-llm-loop.ts):
-
-```sh
-bun examples/full-llm-loop.ts
-```
+Or run the same loop programmatically with full bootstrap + auth — see
+[`tests/02.patch-endpoint.test.ts`](./tests/02.patch-endpoint.test.ts) and the
+test harness at [`tests/_harness.ts`](./tests/_harness.ts).
 
 ---
 

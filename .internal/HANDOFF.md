@@ -299,7 +299,7 @@ mascot was generated this way. Don't rely on it for production work
 7. **`packages/engine/src/operations/apply.ts`** — the EditOp engine.
 8. **`packages/engine/src/runner/runtime-workflow.ts`** + `walk.ts` —
    the dynamic execution path.
-9. **`examples/full-llm-loop/`** — see the whole arc end-to-end.
+9. **`packages/api/tests/02.patch-endpoint.test.ts`** + `_harness.ts` — the LLM patch loop end-to-end with full auth.
 10. **`publishing-doc.md`** — when ready to ship.
 
 ---
