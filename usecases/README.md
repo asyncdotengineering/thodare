@@ -8,10 +8,11 @@ The pattern these share: **the product IS the user-defined workflow engine.** A 
 
 | File | Product class | Real-world examples | What it stresses in Thodare |
 |---|---|---|---|
-| [`notification-platform.md`](./notification-platform.md) | Multi-channel notification SaaS | OneSignal, Pushwoosh, Iterable | High-throughput trigger ingestion, long durable sleeps, audience-as-fanout, multi-channel orchestration |
-| [`sales-funnel-platform.md`](./sales-funnel-platform.md) | Sales funnel + landing-page automation | ClickFunnels, GoHighLevel, Systeme.io | HTTP triggers from page views + form submits, conditional routing, cart-abandonment waits, payment branching |
-| [`marketing-automation.md`](./marketing-automation.md) | Behavior-triggered marketing journeys | Klaviyo, Customer.io, Iterable, Braze | Customer-journey loops, segment iteration, predictive blocks, deep drop-off observability |
-| [`_common-patterns.md`](./_common-patterns.md) | Patterns shared across all three | — | The Thodare extensions these use cases motivate (container blocks, timezone-aware waits, A/B-as-branch, fan-out-from-segment) |
+| [`notification-platform.md`](./notification-platform.md) | Multi-channel notification SaaS (vertical) | OneSignal, Pushwoosh, Iterable | High-throughput trigger ingestion, long durable sleeps, audience-as-fanout, multi-channel orchestration |
+| [`sales-funnel-platform.md`](./sales-funnel-platform.md) | Sales funnel + landing-page automation (vertical) | ClickFunnels, GoHighLevel, Systeme.io | HTTP triggers from page views + form submits, conditional routing, cart-abandonment waits, payment branching |
+| [`marketing-automation.md`](./marketing-automation.md) | Behavior-triggered marketing journeys (vertical) | Klaviyo, Customer.io, Iterable, Braze | Customer-journey loops, segment iteration, predictive blocks, deep drop-off observability |
+| [`dag-workflow-builder.md`](./dag-workflow-builder.md) | **Generic DAG workflow builder (horizontal)** | ActivePieces, n8n, Zapier, Make, Pipedream | **Connector breadth (100-500 integrations), container blocks (loops/parallel), per-org connector marketplace, sandboxed custom-connector execution** |
+| [`_common-patterns.md`](./_common-patterns.md) | Patterns shared across all four | — | The Thodare extensions these use cases motivate (container blocks, timezone-aware waits, A/B-as-branch, fan-out-from-segment, connector marketplace) |
 
 ## Why these use cases matter for the proposal
 
