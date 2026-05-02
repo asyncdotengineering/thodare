@@ -99,7 +99,7 @@ Every table has `organization_id`; every store method takes `organizationId`; ev
 | `@thodare/api` | `packages/api/` | Hono app: workflows / runs / schedules / webhooks / connectors + better-auth. |
 | `@thodare/cli` | `packages/cli/` | `thodare login / token / env / whoami / logout / key {create,list,revoke}`. |
 | `@thodare/docs` | `apps/docs/` | Astro + Starlight, **Diataxis discipline** (T18): tutorial / how-to / reference / explanation, one concern per page. |
-| Examples | `examples/*` | `hello-connector`, `full-llm-loop`, `llm-builder-{openai-agents,vercel-ai}`. |
+| Examples | `examples/*` | `hello-connector`, `llm-builder-{openai-agents,vercel-ai}`. |
 
 ## Strict TS — no escape hatches (T16, T17)
 

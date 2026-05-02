@@ -1,0 +1,46 @@
+{
+  "name": "@thodare/backend-contract-tests",
+  "version": "1.0.0-alpha.1",
+  "description": "Parameterized vitest suite that every Thodare backend adapter must pass.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js",
+        "default": "./dist/index.js"
+      }
+    },
+    "access": "public"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "tsc -p tsconfig.json"
+  },
+  "license": "MIT",
+  "homepage": "https://thodare.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/asyncdotengineering/thodare.git",
+    "directory": "packages/backend-contract-tests"
+  },
+  "dependencies": {
+    "@thodare/backend": "workspace:*",
+    "vitest": "^2.1.9",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "typescript": "^5.7.3"
+  }
+}

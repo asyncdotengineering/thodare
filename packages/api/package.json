@@ -27,7 +27,6 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "demo": "tsx examples/full-llm-loop.ts",
     "build": "tsc -p tsconfig.json",
     "prepublishOnly": "tsc -p tsconfig.json"
   },
