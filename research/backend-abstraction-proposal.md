@@ -69,18 +69,21 @@ A user on Inngest, Trigger, Vercel WDK, or Rivet already has the durability laye
 
 Per `code-reviews/visual-builder-substrates.md` the gaps are concrete and prioritized:
 
-| Gap | Severity | Affects |
-|---|---|---|
-| **No first-class `Credential` model** | **P0** | All three target projects ship one. Without it, headless-builder developers must inline secrets as `hidden()` params and shove them through `ToolContext.env` — which doesn't satisfy multi-org credential vault, OAuth flows, or per-tool scope declarations. |
-| **No output `hiddenFromDisplay` flag** | **P0** | Sim has it. A `getCredentials` block whose output you plumb forward but the LLM should never reason about needs this. |
-| **No `paramVisibility: 'llm-only'`** | **P0** | Sim has 4 visibility brands; Thodare has 3. Computed values the LLM must fill but the user can't see in the form. |
-| **No container blocks / nesting / subflow ops** | **P1** | No for-each, no while, no parallel branches at the JSON level. AP `LOOP_ON_ITEMS` and Sim's `nestedNodes` cannot import. |
-| **`SubBlock.condition` is equality-only** | **P1** | n8n has 12 condition operators (`gte`, `lte`, `between`, `regex`, `exists`, etc.); Sim has function-typed conditions; AP has `DynamicProperties`. Thodare has `{field, value, not?}`. IF-node-style filters degrade to `type: 'json'`. |
-| **No dynamic schema endpoint** | **P1** | Slack channel pickers, Sheets sheet pickers, Airtable table pickers — bread and butter of every visual builder — need a server endpoint that takes form state + auth and returns sub-schema. AP solves with `DynamicProperties.props()`; Thodare has nothing. |
-| **No `compute-edit-sequence` (diff → ops)** | **P1** | When a user drags a block on the canvas, the UI needs to emit a minimal `EditOp[]`. Sim ships this at `lib/workflows/training/compute-edit-sequence.ts`. Thodare can apply ops but can't synthesize them. |
-| **`SubBlock` types: 5 vs Sim's 28+** | **P2** | `code`, `slider`, `combobox`, `multi-select`, `file-upload`, `oauth-connection-selector` etc. all missing. |
+| Gap | Severity | Affects | Designed in v1 |
+|---|---|---|---|
+| **No first-class `Credential` model** | **P0** | All three target projects ship one. Without it, headless-builder developers must inline secrets as `hidden()` params and shove them through `ToolContext.env` — which doesn't satisfy multi-org credential vault, OAuth flows, or per-tool scope declarations. | ✅ §3.5 |
+| **No output `hiddenFromDisplay` flag** | **P0** | Sim has it. A `getCredentials` block whose output you plumb forward but the LLM should never reason about needs this. | ✅ §3.11 |
+| **No `paramVisibility: 'llm-only'`** | **P0** | Sim has 4 visibility brands; Thodare has 3. Computed values the LLM must fill but the user can't see in the form. | ✅ §3.11 |
+| **No container blocks / nesting / subflow ops** | **P1** | No for-each, no while, no parallel branches at the JSON level. AP `LOOP_ON_ITEMS` and Sim's `nestedNodes` cannot import. | ✅ §3.10 |
+| **`SubBlock.condition` is equality-only** | **P1** | n8n has 12 condition operators (`gte`, `lte`, `between`, `regex`, `exists`, etc.); Sim has function-typed conditions; AP has `DynamicProperties`. Thodare has `{field, value, not?}`. IF-node-style filters degrade to `type: 'json'`. | ⚠️ partial — `dynamicSchemas` (§3.12) covers AP-style; richer ops list deferred to v0.3 |
+| **No dynamic schema endpoint** | **P1** | Slack channel pickers, Sheets sheet pickers, Airtable table pickers — bread and butter of every visual builder — need a server endpoint that takes form state + auth and returns sub-schema. AP solves with `DynamicProperties.props()`; Thodare has nothing. | ✅ §3.12 |
+| **No `compute-edit-sequence` (diff → ops)** | **P1** | When a user drags a block on the canvas, the UI needs to emit a minimal `EditOp[]`. Sim ships this at `lib/workflows/training/compute-edit-sequence.ts`. Thodare can apply ops but can't synthesize them. | ✅ §3.14 |
+| **`SubBlock` types: 5 vs Sim's 28+** | **P2** | `code`, `slider`, `combobox`, `multi-select`, `file-upload`, `oauth-connection-selector` etc. all missing. | 🟠 v0.3 — incremental additions per use case demand |
+| **No timezone-aware sleeps** | **P1** | Marketing-automation needs "send at user's local 9am"; today only timezone-naive `step.sleep(Date)`. | ✅ §3.13 |
+| **No HTTP page-rendering / URL-as-trigger** | **P1** | Sales-funnel use case needs the runtime walker to block the HTTP response on the first compute block; URL patterns route to workflows. | ✅ §4.8 (`@thodare/router` companion) |
+| **No connector marketplace primitive** (per-org installed registry, sandboxed custom-connector execution) | **P0** for DAG-builder | DAG-workflow-builder use case (`usecases/dag-workflow-builder.md`) needs per-org installed-connector registry + per-org versioning + sandbox for enterprise custom code. | 🟠 v0.3 — held; first-party connectors ship as separate `@thodare/connector-*` npm packages (ActivePieces-style packaging) without the marketplace primitive. See `.internal/next-up.md`. |
 
-The full 15-item list is in `code-reviews/visual-builder-substrates.md:§4.5`. **The credentials gap is the headline; without it, Thodare is not a credible headless backend for any of the three target visual-builder shapes.**
+The full 15-item list is in `code-reviews/visual-builder-substrates.md:§4.5`. **As of v1 design, 8 of 11 gaps are fully designed; 1 is partial; 2 are deferred to v0.3.**
 
 ### 2.5 `SPEC.md` documents the wrong EditOp set *(NEW — verifiable bug)*
 
@@ -415,7 +418,271 @@ await ctx.invokeWorkflow(onboarding, { userId });
 
 The static analysis path (when Thodare's CLI grows one) recognizes both forms; `new Workflow(...)` registers ownership in the manifest, `Workflow.named(...)` produces a typed reference without claiming ownership. Permission grants follow ownership.
 
-### 3.10 Wire-format guarantees — canonical JSON serialization
+### 3.10 Container blocks — loops, parallel, branches *(v1 design — closes §2.4 P1)*
+
+The single most-requested gap from `usecases/`. Required for foreach-segment / parallel-channels / for-each-row-in-Sheet patterns. Without container blocks, the DAG-workflow-builder use case cannot ship.
+
+**New `Block.kind: "container"`.** A container block contains a body — an inner sub-DAG of blocks — that the runtime walker enters and re-exits.
+
+```ts
+export type BlockKind = "compute" | "wait" | "trigger" | "container";
+
+export interface SerializedBlock {
+  // ... existing fields ...
+  parentId?: string;             // when set, this block lives in another block's body
+  containerKind?:                // only present when kind === "container"
+    | "foreach"                  // iterate over an array, body runs per item, joins on completion
+    | "parallel"                 // forks into N labelled branches, joins when all complete
+    | "branch_one"               // forks into N labelled branches, joins when ANY first completes (race)
+    | "while_loop";              // body runs until a condition block returns false
+}
+```
+
+**Two new `EditOp` operation_types** (preserving Sim Studio's lineage per §1.6 of the visual-builder review — Thodare didn't inherit these originally):
+
+```ts
+{
+  operation_type: "insert_into_subflow",
+  block_id: string,              // target container block
+  child_block_id: string,        // the block to move INTO the container body
+  position?: { x: number; y: number },
+}
+{
+  operation_type: "extract_from_subflow",
+  block_id: string,              // the block to move OUT of its current container
+  // moves to the container's parent (or top-level if container is top-level)
+}
+```
+
+**Wire format** — child blocks live in the same flat `blocks[]` array; their `parentId` points at the container. Connections inside a container body use the same `connections[]` array but their `source`/`target` ids are scoped to the container's body. The runtime walker enters a container, evaluates body topologically, exits.
+
+**Per-iteration steps vs. per-iteration runs** — the design choice:
+
+- **`foreach` with `parallelism > 1`** spawns one `step.run` per item, all inside the parent run. Parent run's `Storage.steps.list` returns N step rows for the iteration body. Cheaper at scale than spawning N runs.
+- **For very high cardinality** (millions of items in a segment, per `_common-patterns.md`), use the v0.3 `runWorkflowBatch(name, inputs[])` API instead — fans out to N independent runs.
+
+**Container-specific outputs** (canonical):
+
+```ts
+// foreach
+outputs: { results: T[]; failures: { index: number; error: string }[]; total: number }
+
+// parallel
+outputs: { branches: Record<branchName, T> }
+
+// branch_one (race)
+outputs: { winner: branchName; value: T }
+
+// while_loop
+outputs: { iterations: number; finalState: T }
+```
+
+**Adapter responsibilities:**
+- `backend-self-host-postgres` / `backend-aws`: implements via per-iteration `step.run` inside the parent run.
+- `backend-cloudflare`: CF Workflows supports `step.do` inside `Promise.all([...])` natively — body iterations map 1:1.
+- All adapters set `capabilities.supportsContainerBlocks: true | false`. Adapters that can't (none expected in v0.2) must reject workflow JSON containing container blocks at validation time.
+
+**Tests added to the contract suite:**
+- `21. Container — foreach-sequential` — body runs N times in order; outputs collected.
+- `22. Container — foreach-parallel` — body runs N times concurrent; outputs collected; failures isolated.
+- `23. Container — parallel-all` — branches run concurrently; container block doesn't complete until all branches do.
+- `24. Container — branch-one (race)` — first branch to complete wins; others canceled.
+- `25. Container — while-loop` — body runs until condition false; max-iteration cap (`maxIterations`) honored.
+
+### 3.11 Output `hiddenFromDisplay` + 4-value `paramVisibility` *(v1 design — closes §2.4 P0)*
+
+Two small but load-bearing additions. From `code-reviews/visual-builder-substrates.md` §1.4 + §1.7.
+
+**Output visibility — the `hiddenFromDisplay` flag:**
+
+```ts
+export interface ToolOutputDef {
+  type: ParamType;
+  description?: string;
+  hiddenFromDisplay?: boolean;   // NEW — hidden from the LLM's view + the visual builder's "downstream tokens" picker
+}
+
+// Use case: a getCredentials block whose output flows to the next block's auth header,
+// but the LLM should never reason about the literal token.
+defineConnector({
+  // ...
+  outputs: z.object({
+    accessToken: hiddenOutput(z.string()),   // NEW helper — marks the field hidden
+    expiresAt:   z.string(),
+  }),
+});
+```
+
+**Validator behavior:** `applyOperations` strips `hiddenFromDisplay: true` outputs from any LLM-facing surface (`GET /api/connectors/:type` connector schema response, the `EditOp` validation context, the `applyOperations.skipped_items[]` reasoning). At runtime, the value still flows through `blockOutputs[blockId]` so downstream blocks can reference it via `{{prevBlock.accessToken}}`. The runtime resolver knows it's hidden; the LLM's view of available downstream variables omits it.
+
+**Param visibility — the 4th value:**
+
+```ts
+// Was 3 values (matching SPEC §3 T3); now 4 (matching Sim Studio's set):
+export const ParamVisibility = z.enum([
+  "user-or-llm",   // existing default — both can fill
+  "user-only",     // existing — user form only, never LLM
+  "hidden",        // existing — secret-handling boundary (T3)
+  "llm-only",      // NEW — LLM must fill, user form doesn't render
+]);
+```
+
+**Use case for `llm-only`** — computed values like `__internal_correlation_id` or `__suggested_template` that a workflow-construction LLM is expected to pass but a marketer using the canvas should never see in their form.
+
+**Validator behavior:** `applyOperations` validates `llm-only` params are present in the LLM-emitted `params` AND absent from any user-form-emitted patch. The visual builder's form renderer skips `llm-only` fields; the LLM's tool schema (per `GET /api/connectors/:type`) includes them.
+
+**Tests added to contract suite:**
+- `26. Output hiddenFromDisplay` — declared in connector outputs; runtime walker passes value to downstream block; `GET /api/connectors/:type` response excludes the field; LLM tool catalog excludes the field.
+- `27. paramVisibility 'llm-only'` — LLM-emitted patch with the field succeeds; UI-emitted patch with the field is skipped with `param_not_user_fillable`.
+
+### 3.12 Dynamic schema refresh endpoint *(v1 design — closes §2.4 P1)*
+
+Slack channel pickers, Sheets sheet pickers, Airtable table pickers — every visual builder needs dynamic dropdowns. ActivePieces solves this with `Property.DynamicProperties.props(formState, ctx)`; Sim with `fetchOptions(blockId) → Promise<options[]>`. Thodare adopts a server-side pattern.
+
+**New endpoint:** `POST /api/connectors/:type/refresh`
+
+```ts
+// Request body
+{
+  formState: Record<string, unknown>,           // current form values from the canvas
+  refreshFor: string,                            // which sub-block to compute fresh schema for
+  credentialId?: string,                         // when the dropdown depends on auth context
+}
+
+// Response body
+{
+  subBlockId: string,                            // matches refreshFor
+  schema: SubBlock,                              // a fresh SubBlock definition for that field
+  cacheTtlSeconds?: number,                      // canvas may cache this long before refetching
+}
+```
+
+**New connector authoring API** — `defineConnector` accepts an optional `dynamicSchemas?` map:
+
+```ts
+defineConnector({
+  type: "slack_post_message",
+  // ...
+  params: z.object({
+    channel: z.string(),    // base type — populated by dynamic schema at form-render time
+    text:    z.string(),
+  }),
+  dynamicSchemas: {
+    // key = sub-block id; value = function that builds a fresh SubBlock based on form state
+    channel: async ({ formState, credential }) => {
+      const channels = await fetchChannelsFromSlack(credential.accessToken);
+      return {
+        id: "channel",
+        title: "Channel",
+        type: "dropdown",
+        options: channels.map(c => ({ id: c.id, label: `#${c.name}` })),
+      };
+    },
+  },
+});
+```
+
+**Adapter responsibilities:** none — this is engine + API only. The endpoint runs in `@thodare/api` against the connector's `dynamicSchemas[refreshFor]` callback, with the credential resolved + injected per the org context.
+
+**Capability flag:** `supportsDynamicSchemas: boolean` — false only for adapters that can't run arbitrary callbacks at refresh time (none expected in v0.2).
+
+**Tests:**
+- `28. Dynamic schema refresh — happy path` — canvas POSTs form state; receives fresh sub-block schema; renders dropdown.
+- `29. Dynamic schema refresh — credential injection` — connector's dynamic schema function receives `ctx.credential`; secret never leaks into response body.
+
+### 3.13 Timezone-aware waits *(v1 design — closes the marketing/notification gap)*
+
+`step.sleep(Date)` works for absolute timestamps but is timezone-naive. Marketing-automation and notification-platform need "send at user's local 9am" — the most-used pattern in customer-journey flows.
+
+**New step primitive:** `step.sleepUntilLocalTime`
+
+```ts
+interface ThodareStep {
+  // ... existing methods ...
+  sleepUntilLocalTime(name: string, opts: {
+    timezone: string;              // IANA tz, e.g. "America/Los_Angeles"
+    hour: number;                  // 0-23
+    minute?: number;               // 0-59, default 0
+    earliestDate?: Date;           // don't fire before this date (default: now)
+    skipWeekends?: boolean;        // jump Sat/Sun forward to Mon (default false)
+  }): Promise<void>;
+}
+
+// Usage in a connector:
+defineConnector({
+  type: "wait_quiet_hours",
+  kind: "wait",
+  // ...
+  async execute(params, ctx) {
+    const user = await fetchUser(ctx.input.userId);
+    return ctx.step.sleepUntilLocalTime("respect_quiet_hours", {
+      timezone: user.timezone,
+      hour: 9,
+      minute: 0,
+    });
+  },
+});
+```
+
+**Implementation:** the engine resolves `(timezone, hour, minute)` to an absolute UTC Date at scheduling time, then delegates to the underlying adapter's `step.sleep(Date)`. **The resolution happens once** at schedule time — DST changes between scheduling and resume don't change behavior (per replay determinism). If the resolved Date is in the past, the engine schedules the next valid occurrence (next day, or next weekday if `skipWeekends`).
+
+**Adapter responsibilities:** none — the engine resolves timezones (via the host's Intl APIs); adapters only see absolute Dates.
+
+**Tests:**
+- `30. Timezone-aware sleep — happy path` — schedule for 9am LA; resume at 9am LA; assert timezone-correct resume.
+- `31. Timezone-aware sleep — DST transition` — schedule across a DST change; resume at the wall-clock-correct local time.
+- `32. Timezone-aware sleep — skipWeekends` — schedule for Sat 9am with skipWeekends; resume Mon 9am.
+
+### 3.14 Diff → ops endpoint *(v1 design — closes §2.4 P1)*
+
+When a user drags a block on the canvas, the UI needs to emit a minimal `EditOp[]` — not re-PUT the whole document. Sim Studio ships this at `apps/sim/lib/workflows/training/compute-edit-sequence.ts`. Thodare adopts the pattern as a server-side endpoint so every UI doesn't reinvent it.
+
+**New endpoint:** `POST /api/workflows/:id/diff`
+
+```ts
+// Request body
+{
+  target: SerializedWorkflow,                    // the desired end-state JSON
+}
+
+// Response body
+{
+  ops: EditOp[],                                  // minimal sequence to reach target from current state
+  summary: {
+    additions: number;
+    edits: number;
+    deletions: number;
+    connections_added: number;
+    connections_removed: number;
+    container_moves: number;                      // requires §3.10 container blocks
+  };
+}
+```
+
+**Algorithm** (sketch — full design in the implementation RFC):
+
+1. Load current `SerializedWorkflow` from the store.
+2. Diff `blocks[]`:
+   - Blocks in target not in current → `add` ops.
+   - Blocks in current not in target → `delete` ops (with tombstone insertion if any in-flight runs reference them per §3.6).
+   - Blocks in both with `params` diff → `edit` ops.
+   - Blocks in both with `parentId` diff → `insert_into_subflow` / `extract_from_subflow` ops (per §3.10).
+3. Diff `connections[]`:
+   - Connections in target not in current → `connect` ops.
+   - Connections in current not in target → `disconnect` ops.
+4. Order ops topologically: parents before children for `add`, reverse for `delete`. `connect` ops last (after all source/target blocks exist).
+5. Return canonical-JSON-serialized response (per §3.14).
+
+**Idempotency:** the resulting `ops[]` is deterministic for a given (current, target) pair — same inputs always produce byte-identical output. Critical for canvas drag-and-drop loops where the canvas might issue the same diff twice.
+
+**Companion helper package:** `@thodare/diff-helper` exports `computeEditSequence(current, target): EditOp[]` for clients that want to compute diffs locally (offline editing, optimistic updates). Same algorithm; same output. The endpoint exists so non-JS canvases (mobile apps, server-rendered UIs) don't have to reimplement.
+
+**Tests:**
+- `33. Diff — block add` — target has one new block; ops = `[add]`.
+- `34. Diff — block delete with tombstone` — target removes a block referenced by an in-flight run; ops include `add` of tombstone before `delete`.
+- `35. Diff — round-trip` — `applyOperations(current, diff(current, target)) === target` (canonical-equal).
+
+### 3.15 Wire-format guarantees — canonical JSON serialization
 
 Per `code-reviews/kapso.md` §8a — Kapso's `kapso-workflows/src/json.ts` produces deterministic JSON so `kapso push` diffs are clean.
 
@@ -558,6 +825,76 @@ Demoted from v2's "inheritance play." `backend-wdk` exists if a developer specif
 
 Adopters of Thodare-as-headless-backend pick the platform-native Backend whose UI behavior + cost + ops familiarity matches their team. `backend-wdk` (§4.6, opt-in) is omitted from this matrix because its capabilities are inherited from whatever WDK World it's pointed at; if a user picks WDK on Vercel, they should compare against `backend-vercel` directly first.
 
+### 4.8 `@thodare/router` — companion package for HTTP page rendering + URL-as-trigger *(v1 design — closes the sales-funnel gap)*
+
+The sales-funnel use case (`usecases/sales-funnel-platform.md`) needs two capabilities that no other use case requires + no Backend ships natively:
+
+1. **Synchronous block return for HTTP page rendering.** A visitor hits `https://funnel.acme.com/vsl-1`; the runtime walker dispatches a `serve_landing_page` block; the block's render output (HTML) is the HTTP response body. The HTTP request must block until that first compute block returns.
+2. **Arbitrary URL pattern → workflow run routing.** Today, only `POST /api/workflows/:id/run` triggers runs. Funnel pages need `<any URL pattern>` → `<workflow lookup by URL pattern>` → run.
+
+Rather than adding both to every Backend (or to the engine), they ship as a **companion package** that any Backend can mount.
+
+**Package shape:** `@thodare/router` — exports a Hono / Web-standard router that:
+
+```ts
+import { createPageRouter, defineRoute } from "@thodare/router";
+
+export const router = createPageRouter({
+  apiBaseUrl: process.env.THODARE_API_URL,
+  apiKey:     process.env.THODARE_API_KEY,
+});
+
+router.add(defineRoute({
+  pattern: "/vsl/:variant",
+  workflowId: "vsl-funnel",
+  // The first block in the workflow runs SYNCHRONOUSLY; its return is the HTTP body
+  responseFromBlock: { blockId: "page-1", contentType: "text/html" },
+  // Subsequent visitor actions (form submits, clicks) advance the run via signal
+  signalEndpoints: {
+    "/vsl/:variant/submit": { signalName: "form_submit", correlationFromCookie: "session_id" },
+  },
+}));
+
+// Mount on whatever HTTP host the user is on
+export default router.handler;        // → (req: Request) => Promise<Response>
+```
+
+**Engine support — synchronous return** (small addition to `runWorkflow` opts):
+
+```ts
+interface RunWorkflowOpts {
+  // ... existing ...
+  awaitFirstBlockResult?: { blockId: string; timeoutMs?: number };
+  // When set, runWorkflow does NOT return until the named block completes.
+  // The block's output is returned in the run handle.
+  // The rest of the workflow continues asynchronously after the HTTP response is sent.
+}
+
+const handle = await world.runWorkflow("vsl-funnel", { sessionId, ... }, {
+  awaitFirstBlockResult: { blockId: "page-1", timeoutMs: 5000 },
+});
+const html = handle.firstBlockResult.html;
+return new Response(html, { headers: { "Content-Type": "text/html" } });
+```
+
+**Adapter responsibilities:** every Backend must implement `awaitFirstBlockResult` — it's a small refactor (the runtime walker already runs the first compute block synchronously by definition; the option just exposes its result).
+
+**Capability flag:** `supportsAwaitFirstBlockResult: boolean` — true for all v0.2 adapters. False for any future Backend where the runtime walker doesn't sit on the request path (some serverless triggers).
+
+**Why a companion package, not core:**
+- Most use cases (notification / marketing-automation / dag-workflow-builder) don't need URL-pattern routing — they're triggered via webhooks or events.
+- The sales-funnel use case is page-rendering-heavy; coupling that into the engine bloats the surface for everyone.
+- `@thodare/router` ships as MIT, depends on `@thodare/api` peer, and can be added/removed independently.
+
+**Tests added to contract suite:**
+- `36. Synchronous first-block result` — `awaitFirstBlockResult: { blockId, timeoutMs }` returns the block's output before the rest of the run continues.
+- `37. Synchronous first-block timeout` — block exceeds `timeoutMs`; run continues asynchronously, request returns 504; tested separately.
+
+**Tests for `@thodare/router`** (separate test pack in the router package):
+- URL pattern matching (path params, wildcards, query string ignored).
+- Cookie-based correlation key extraction for signal endpoints.
+- 404 on unknown pattern; 405 on wrong method.
+
 ---
 
 ## 5. Migration path
@@ -607,6 +944,19 @@ This is **the proof point** — once a second adapter passes contract tests, the
 - Per-adapter docs page in the deploy quadrant.
 - **Headless-builder demo:** `examples/headless-ui-demo/` — a minimal canvas (React Flow + 200 LoC of glue) that reads from `@thodare/api` and proves the substrate story. Same demo runs against every adapter; only the deploy target changes.
 - *(deferred to v0.3+)* `packages/backend-wdk/` (opt-in only; ~150 LoC), `packages/backend-netlify/`, `packages/backend-rivetkit-engine/`, `packages/backend-inngest/`
+
+### Phase 5b — Ship the v1 visual-builder gap closures (~3 weeks, parallelizable with Phase 5)
+
+These close the §2.4 gap list. Each is independently shippable; collectively they make Thodare a credible substrate for the four use cases in `usecases/`.
+
+- **§3.10 Container blocks** (~1 week) — engine support for `Block.kind: "container"` + `parentId` + 4 container kinds (`foreach` / `parallel` / `branch_one` / `while_loop`). New EditOps `insert_into_subflow` / `extract_from_subflow`. Walker enters/exits containers. Contract tests #21–25.
+- **§3.11 Output `hiddenFromDisplay` + `paramVisibility: 'llm-only'`** (~3 days) — small schema additions + validator + LLM-tool-catalog filter. Contract tests #26–27.
+- **§3.12 Dynamic schema refresh endpoint** (~3 days) — `POST /api/connectors/:type/refresh` + `defineConnector({ dynamicSchemas })` + per-org credential injection. Contract tests #28–29.
+- **§3.13 Timezone-aware waits** (~2 days) — `step.sleepUntilLocalTime` engine helper that resolves to absolute Date + delegates. Contract tests #30–32.
+- **§3.14 Diff → ops endpoint + `@thodare/diff-helper` package** (~1 week) — `POST /api/workflows/:id/diff` + canonical algorithm + reusable client helper. Contract tests #33–35.
+- **§4.8 `@thodare/router` companion package** (~1 week) — sales-funnel HTTP page-rendering + URL-as-trigger. Engine adds `awaitFirstBlockResult` opt to `runWorkflow`. Contract tests #36–37 + router-specific tests.
+
+**First-party connector packages** (~5 days, parallel) — ship the ActivePieces-style first-party connector library structure as a starter set: `@thodare/connector-slack`, `@thodare/connector-resend`, `@thodare/connector-github`, `@thodare/connector-stripe`, `@thodare/connector-google-sheets`. Each package = one-vendor connector set, independently versioned via Changesets. **No marketplace primitive yet** (per-org installed registry + sandboxed custom-connector execution deferred to v0.3 — see `.internal/next-up.md`); customers consume the packages via plain `npm install`.
 
 ### Phase 6 — Deprecate the direct openworkflow API (~v0.3, separate release)
 

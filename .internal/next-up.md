@@ -172,16 +172,76 @@ don't redesign decisions T1–T19 already made).
   - Example deployment under `examples/deploy-cf-workers/`.
 - **SPEC §:** v0 deferred. Big lift; consider after Tier 1.
 
-### Connector marketplace primitives
+### Connector marketplace primitives — *held for v0.3 per backend-abstraction-proposal §2.4*
 
+- **Status (2026-05-02).** **Held.** v1 ships first-party connectors
+  as separate `@thodare/connector-*` npm packages (ActivePieces-style
+  packaging — `@thodare/connector-slack`, `@thodare/connector-stripe`,
+  `@thodare/connector-google-sheets`, etc.). Customers `npm install`
+  what they need. The marketplace primitive (per-org installed
+  registry + per-org versioning + sandboxed custom-connector
+  execution) is a **v0.3+ effort**.
+- **Why deferred.** The DAG-workflow-builder use case
+  (`usecases/dag-workflow-builder.md`) needs the full marketplace —
+  per-org installed registry, per-org connector pinning, sandboxed
+  enterprise custom code. Building this in v0.2 is at least a 3-week
+  effort + ongoing maintenance burden. Shipping first-party
+  connectors as plain npm packages closes 80% of the value at 10%
+  of the cost; the remaining 20% (custom per-org code, marketplace UI,
+  sandboxing) waits for clear demand.
 - **Why.** Today connectors ship with the application binary. A
   marketplace lets you publish a connector once and consume it across
-  many Thodare deployments.
-- **Where.** New packages: `packages/connector-publish/`,
-  `packages/connector-consume/`. New CLI verbs: `thodare connector
-  publish` / `install`.
-- **Acceptance.** TBD; needs an RFC. Probably 5-day spike.
-- **SPEC §:** v0 deferred.
+  many Thodare deployments — and lets enterprise customers ship their
+  own private connector code without granting Thodare full Node
+  access.
+- **Acceptance (when v0.3 picks this up).**
+  - `packages/connector-marketplace/` — per-org installed-connector
+    registry table, CRUD endpoints, per-org version pinning.
+  - `packages/connector-sandbox/` — adapter for sandboxed execution
+    (libkrun via iii-sandbox pattern, OR e2b, OR Modal, OR
+    Cloudflare Workers per-isolate). Pick one.
+  - New CLI verbs: `thodare connector publish` / `install` for
+    private custom-connector packages.
+  - 8+ tests proving per-org isolation + version pinning + sandbox
+    cannot escape org context.
+  - RFC at `rfcs/connector-marketplace/README.md` first.
+- **SPEC §:** v0 deferred. Cross-references the
+  `usecases/dag-workflow-builder.md` §7 P0 + §3 connector-marketplace
+  callouts in the backend abstraction proposal.
+
+### First-party connector packages (ActivePieces-style packaging) — *v1 starter set*
+
+- **Status (2026-05-02).** **Will ship in v1 Phase 5b alongside the
+  visual-builder gap closures.**
+- **Why.** Holds the marketplace primitive while still letting the
+  4 use cases in `usecases/` build their products. ActivePieces
+  ships ~250 community pieces this way (separate npm packages under
+  `@activepieces/piece-*`); Thodare can do the same under
+  `@thodare/connector-*`.
+- **v1 starter set** (5 packages).
+  - `@thodare/connector-slack` — `send_message`, `create_channel`,
+    `lookup_user`, `set_status`.
+  - `@thodare/connector-resend` — `send_email`, `create_audience`,
+    `add_contact`.
+  - `@thodare/connector-github` — `create_issue`, `comment_on_issue`,
+    `list_pull_requests`, `merge_pr`.
+  - `@thodare/connector-stripe` — `create_customer`, `create_payment_intent`,
+    `refund`, `list_charges`.
+  - `@thodare/connector-google-sheets` — `append_row`, `read_range`,
+    `update_cell`, `list_sheets`.
+- **Where.** Each package is its own workspace under
+  `packages/connector-<vendor>/`. Each ships the connector definition
+  + credential type + tests + README. Independently versioned via
+  Changesets per T15.
+- **Acceptance.**
+  - 5 packages published to npm.
+  - Each connector passes the engine's connector contract tests
+    (Zod schema valid, OAuth flow round-trips, params validated).
+  - Each package's README documents the connector's `defineConnector`
+    shape + the credential type + an example workflow JSON snippet.
+  - At least one example in `examples/` uses each connector.
+- **SPEC §:** v0 already shipped the connector primitive. This is
+  packaging-and-discipline work, not engine work.
 
 ## Tier 3 — strategic (one week+)
 
