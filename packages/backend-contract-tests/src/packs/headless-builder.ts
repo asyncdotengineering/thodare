@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { ThodareBackend, RunId } from "@thodare/backend";
+import type { ThodareBackend, RunId, StepId } from "@thodare/backend";
 
 export function registerHeadlessLiveSubscription(
   backend: ThodareBackend,
@@ -33,7 +33,7 @@ export function registerHeadlessStepIOInspection(
         return await ctx.step.run("compute", async () => 42);
       });
       const handle = await backend.runWorkflow(name, {});
-      const steps = await backend.steps.list(handle.runId as RunId);
+      const steps = await backend.steps.list(handle.runId);
       expect(Array.isArray(steps)).toBe(true);
     });
   });
@@ -45,7 +45,10 @@ export function registerHeadlessResumeFromStep(
   describe("headless-builder/resume-from-step", () => {
     it("resumeFromStep returns a RunHandle", async () => {
       expect(backend.capabilities.supportsResumeFromStep).toBe(true);
-      const handle = await backend.resumeFromStep("fake-run", "fake-step");
+      const handle = await backend.resumeFromStep(
+        "fake-run" as RunId,
+        "fake-step" as StepId,
+      );
       expect(typeof handle.runId).toBe("string");
     });
   });
@@ -55,7 +58,7 @@ export function registerHeadlessRecover(backend: ThodareBackend): void {
   describe("headless-builder/recover", () => {
     it("recover flips failed run back to pending", async () => {
       expect(backend.capabilities.supportsRecover).toBe(true);
-      const handle = await backend.recover("fake-run");
+      const handle = await backend.recover("fake-run" as RunId);
       expect(typeof handle.runId).toBe("string");
     });
   });

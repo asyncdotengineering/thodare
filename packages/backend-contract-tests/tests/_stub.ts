@@ -1,6 +1,7 @@
 import type {
   ThodareBackend,
   BackendCapabilities,
+  RunId,
 } from "@thodare/backend";
 import { SPEC_VERSION_CURRENT } from "@thodare/backend";
 
@@ -87,7 +88,8 @@ export function makeStubBackend(overrides?: StubOverrides): ThodareBackend {
 
     defineWorkflow: (_s, _h) =>
       Promise.resolve({ name: _s.name, specVersion: SPEC_VERSION_CURRENT }),
-    runWorkflow: (_n, _i, _o) => Promise.resolve({ runId: "stub-run-id" }),
+    runWorkflow: (_n, _i, _o) =>
+      Promise.resolve({ runId: "stub-run-id" as RunId }),
     signal: (_r, _s, _p) => Promise.resolve(),
     cancel: (_r) => Promise.resolve(),
     resumeFromStep: (_r, _s) => Promise.resolve({ runId: _r }),

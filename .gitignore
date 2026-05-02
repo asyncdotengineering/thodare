@@ -34,3 +34,6 @@ coverage/
 
 # --- changeset working state ---
 .changeset/pre.json
+
+# --- delegation handoff artifacts (briefs / prompts / results, local audit only) ---
+.handoff/

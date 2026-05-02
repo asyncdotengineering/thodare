@@ -3,6 +3,7 @@ import type { SpecVersion } from "./spec-version.js";
 import type { Storage } from "./storage.js";
 import type { Queue } from "./queue.js";
 import type { Streamer } from "./streamer.js";
+import type { RunId, StepId } from "./ids.js";
 
 // ── Workflow spec ──
 
@@ -25,7 +26,7 @@ export type ThodareHandler = (ctx: ThodareCtx) => Promise<unknown>;
 export interface ThodareCtx {
   input: unknown;
   step: ThodareStep;
-  runId: string;
+  runId: RunId;
   signal: AbortSignal;
   log: ThodareLogger;
 }
@@ -81,7 +82,7 @@ export interface RunOpts {
 // ── Run handle ──
 
 export interface RunHandle {
-  runId: string;
+  runId: RunId;
   firstBlockResult?: {
     blockId: string;
     output: unknown;
@@ -110,22 +111,22 @@ export interface ThodareBackend extends Storage, Queue, Streamer {
   ): Promise<RunHandle>;
 
   signal(
-    runId: string,
+    runId: RunId,
     signalName: string,
     payload?: unknown,
   ): Promise<void>;
 
-  cancel(runId: string): Promise<void>;
+  cancel(runId: RunId): Promise<void>;
 
   resumeFromStep(
-    runId: string,
-    stepId: string,
+    runId: RunId,
+    stepId: StepId,
   ): Promise<RunHandle>;
 
-  recover(runId: string): Promise<RunHandle>;
+  recover(runId: RunId): Promise<RunHandle>;
 
   getEncryptionKeyForRun?(
-    runId: string,
+    runId: RunId,
     ctx?: Record<string, unknown>,
   ): Promise<Uint8Array | undefined>;
 
