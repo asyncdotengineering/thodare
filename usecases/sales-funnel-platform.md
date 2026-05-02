@@ -242,7 +242,7 @@ That entire diagram is one workflow JSON. Visitors enter at the top; their state
 
 This use case is **edge-heavy** — the workflow runtime serves user-facing webpages, not just background automation. Latency matters.
 
-**Recommended: `world-cloudflare`.**
+**Recommended: `backend-cloudflare`.**
 
 - Pages serve from the edge (Workers); the runtime walker IS the request handler.
 - D1 stores funnel JSON + visitor sessions; DO holds per-session state.
@@ -250,14 +250,14 @@ This use case is **edge-heavy** — the workflow runtime serves user-facing webp
 - No regional latency for the page-serving path.
 - Scales to zero off-hours; pay-per-visitor.
 
-**Alternative: `world-vercel`.**
+**Alternative: `backend-vercel`.**
 
 - Vercel Edge Functions for page rendering.
 - Vercel Postgres for state.
 - Simpler if FunnelForge already uses Vercel for their dashboard.
 - Slightly higher latency than CF but better DX.
 
-**NOT recommended for this use case: `world-self-host-postgres`.**
+**NOT recommended for this use case: `backend-self-host-postgres`.**
 
 - Funnel hosting needs global edge to keep page-load times below the threshold where conversion drops. A single-region Postgres + worker pod adds 100-300ms per page load for international visitors. Acceptable for the marketer dashboard; unacceptable for the visitor-facing pages.
 
@@ -290,7 +290,7 @@ The unique twist for FunnelForge: their page renderer + their canvas are bigger 
 | Synchronous block return for page rendering | Today Thodare runs are fire-and-forget. For "render the next page in the funnel" the runtime needs `runWorkflow` to *block* the HTTP response until the first compute block returns its render output. | **P1** for this use case |
 | Per-step input/output streaming | Page rendering wants to stream HTML; today Thodare's `Storage.steps.list` returns final outputs only. | **P2** (lift WDK's `getWritable<T>()` pattern) |
 | HTTP-as-trigger (URL → workflow) routing | Today `POST /api/workflows/:id/run` is the trigger. For URL-based funnel pages, FunnelForge needs an extension that matches arbitrary URL patterns to workflows. | **P1** — could ship as a separate `@thodare/router` package |
-| Conditional resume by correlation key | `wait_for_event` already supports correlation keys; the implementation needs to be airtight at funnel scale (millions of concurrent waiting runs, each correlated by `sessionId`). | **P2** — the openworkflow runtime already does this; `world-cloudflare` adapter needs to verify behavior at scale |
+| Conditional resume by correlation key | `wait_for_event` already supports correlation keys; the implementation needs to be airtight at funnel scale (millions of concurrent waiting runs, each correlated by `sessionId`). | **P2** — the openworkflow runtime already does this; `backend-cloudflare` adapter needs to verify behavior at scale |
 | Affiliate-style "schedule-this-later" side effect block | Affiliate commission payouts need to fire 30 days after purchase (refund window). A `wait_duration("30d")` block + `pay_affiliate` works but ties up a run slot for 30 days. Worth optimizing as a "schedule-detached" pattern in v0.3. | **P3** |
 | Branching on payment outcome | Already supported via `sourceHandle`; just needs documentation pattern. | works today |
 | Cart-abandonment `wait_for_event` with timeout | Already supported via `PauseInfo.timeoutMs`. | works today |
@@ -301,6 +301,6 @@ The unique twist for FunnelForge: their page renderer + their canvas are bigger 
 >
 > *Built on Thodare — the open-source headless workflow engine. We focus on the page-serving + funnel canvas; the durable orchestration is handled.*
 
-ClickFunnels charges $97-297/mo per customer. FunnelForge running on `world-cloudflare` pays roughly $0.0006 per visitor at full conversion-funnel load (per `research/cloudflare-as-world.md` math). At a 1% margin against ClickFunnels' price, FunnelForge is profitable from customer #1.
+ClickFunnels charges $97-297/mo per customer. FunnelForge running on `backend-cloudflare` pays roughly $0.0006 per visitor at full conversion-funnel load (per `research/cloudflare-as-world.md` math). At a 1% margin against ClickFunnels' price, FunnelForge is profitable from customer #1.
 
 That margin is the headless-substrate value proposition. It exists because Thodare absorbs the engineering that would otherwise be "reimplement Temporal / Inngest / openworkflow internally."

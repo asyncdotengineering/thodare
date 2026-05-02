@@ -23,9 +23,9 @@ Concurrent runs:
 
 **What this needs from Thodare:** scaling `runWorkflow(name, input)` to **millions of concurrent runs per workflow definition** while keeping per-run state cheap. Each adapter has different scaling characteristics here:
 
-- `world-self-host-postgres`: each run = ~5 KB in `workflow_runs` + N rows in `workflow_steps`. ~200 GB at 100M concurrent runs. Manageable with partitioning + retention policies.
-- `world-cloudflare`: each run = a CF Workflows instance. CF currently caps at 50,000 concurrent active instances per account on the paid tier. At 100M concurrent waiting subscribers, this isn't viable on a single account — need account sharding (see proposal v2 §4.3 noisy-neighbor mitigation).
-- `world-aws`: SQS queue depth + Lambda concurrency. RDS row count is fine; the bottleneck is Lambda concurrency at burst (default 1000/region, raisable).
+- `backend-self-host-postgres`: each run = ~5 KB in `workflow_runs` + N rows in `workflow_steps`. ~200 GB at 100M concurrent runs. Manageable with partitioning + retention policies.
+- `backend-cloudflare`: each run = a CF Workflows instance. CF currently caps at 50,000 concurrent active instances per account on the paid tier. At 100M concurrent waiting subscribers, this isn't viable on a single account — need account sharding (see proposal v2 §4.3 noisy-neighbor mitigation).
+- `backend-aws`: SQS queue depth + Lambda concurrency. RDS row count is fine; the bottleneck is Lambda concurrency at burst (default 1000/region, raisable).
 
 **v0.3 follow-up needed:** `runWorkflowBatch(name, inputs[])` API for the "fan out to a segment of N users" case where N can be millions.
 
@@ -37,11 +37,11 @@ Thodare's `wait_duration` block (T1) maps to `step.sleep` on every adapter:
 
 | Adapter | Max contiguous sleep | Approach |
 |---|---|---|
-| `world-self-host-postgres` | unbounded | openworkflow's `step.sleep` — the row sits in `workflow_waits` with `resume_at` |
-| `world-self-host-sqlite` | bounded by single-process uptime; not for production | same primitive |
-| `world-cloudflare` | **365 days** (per CF Workflows docs) | `step.sleep` directly |
-| `world-vercel` | unbounded (Postgres-backed) | same as self-host |
-| `world-aws` | unbounded (DynamoDB TTL or RDS row) | SQS `delaySeconds` chains for >15min |
+| `backend-self-host-postgres` | unbounded | openworkflow's `step.sleep` — the row sits in `workflow_waits` with `resume_at` |
+| `backend-self-host-sqlite` | bounded by single-process uptime; not for production | same primitive |
+| `backend-cloudflare` | **365 days** (per CF Workflows docs) | `step.sleep` directly |
+| `backend-vercel` | unbounded (Postgres-backed) | same as self-host |
+| `backend-aws` | unbounded (DynamoDB TTL or RDS row) | SQS `delaySeconds` chains for >15min |
 
 **Pattern requirement:** sleeps must consume zero compute while waiting. Verified: every adapter does this — the run is suspended, no Lambda / Worker / pod stays alive for the duration.
 
@@ -62,7 +62,7 @@ ctx.input.prevOutput.messageId = "msg_abc123"
    ↓
 ... external system (SendGrid) reports email open via webhook ...
    ↓
-JourneyHQ ingestion calls: world.signal(runId, "email_opened", { messageId: "msg_abc123" })
+JourneyHQ ingestion calls: backend.signal(runId, "email_opened", { messageId: "msg_abc123" })
    OR
 JourneyHQ ingestion calls: thodare.hooks.resume(token = "msg_abc123", payload)
    ↓
@@ -72,7 +72,7 @@ Run resumes from the wait_for_event block with payload as output.
 **Implementation reality across adapters:**
 
 - All five v0.2 adapters support this via `step.waitForSignal`.
-- The lookup-by-token cost matters at scale. `world-self-host-postgres` needs an index on `workflow_hooks(token)`; `world-cloudflare` uses DO addressing (constant lookup).
+- The lookup-by-token cost matters at scale. `backend-self-host-postgres` needs an index on `workflow_hooks(token)`; `backend-cloudflare` uses DO addressing (constant lookup).
 - Timeouts must be honored even if no signal ever arrives — verified by the contract test suite (proposal v2 §3.7 test #4).
 
 ## 4. The "send via channel honoring user preferences" pattern
@@ -223,7 +223,7 @@ The use cases collectively validate **most of the v2 proposal's prioritized gaps
 - 🆕 `POST /api/workflows/:id/run-batch?stream=ndjson` — batched trigger ingestion
 - 🆕 Trigger-level deduplication (`deduplicate: { keyField, windowMinutes }`)
 - 🆕 Native A/B-split block with auto-tracked variant performance (deferred from userland)
-- 🆕 Account-sharding strategy for `world-cloudflare` (noisy-neighbor mitigation at vertical-SaaS scale)
+- 🆕 Account-sharding strategy for `backend-cloudflare` (noisy-neighbor mitigation at vertical-SaaS scale)
 - 🆕 Documented pattern for per-subscriber state in a separate DB (docs only)
 - 🆕 Documented pattern for piping `step_completed` to ClickHouse/BigQuery for analytics (docs only)
 

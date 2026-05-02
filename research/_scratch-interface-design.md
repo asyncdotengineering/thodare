@@ -34,12 +34,12 @@ Everything else is engine-pure.
 
 ---
 
-## Alternative A — "Thick World" (WDK-shaped)
+## Alternative A — "Thick Backend" (WDK-shaped)
 
-Mirror Vercel's WDK contract. Thodare owns the runtime; the World owns storage, queue, streaming, lifecycle.
+Mirror Vercel's WDK contract. Thodare owns the runtime; the Backend owns storage, queue, streaming, lifecycle.
 
 ```ts
-interface ThodareWorld extends Queue, Storage, Streamer {
+interface ThodareBackend extends Queue, Storage, Streamer {
   specVersion?: number;
   start?(): Promise<void>;
   close?(): Promise<void>;
@@ -76,9 +76,9 @@ Surface: ~30 methods.
 Treat any **durable execution engine that already exists** (openworkflow, WDK, Inngest, Temporal, CF Workflows, Rivet) as a peer, and abstract over their common shape.
 
 ```ts
-interface ThodareWorld {
+interface ThodareBackend {
   readonly id: string;                       // "openworkflow-pg" | "wdk-vercel" | "cloudflare" | ...
-  readonly capabilities: WorldCapabilities;  // see below
+  readonly capabilities: BackendCapabilities;  // see below
 
   // Workflow lifecycle (orchestrator-side)
   defineWorkflow(spec: WorkflowSpec, handler: ThodareHandler): Promise<RegisteredWorkflow>;
@@ -116,7 +116,7 @@ interface ThodareStep {
 }
 
 // Capability flags — the adapter declares what's possible
-interface WorldCapabilities {
+interface BackendCapabilities {
   maxStepDurationMs: number;        // 15min for Lambda, 30s for Workers, ∞ for self-host
   maxRunDurationMs: number;         // ∞ for most, but matters for managed
   signalPrecision: "exact" | "best-effort";
@@ -131,8 +131,8 @@ interface WorldCapabilities {
 Surface: ~10 methods + the step shim.
 
 **Pros:**
-- Thodare's value (JSON DSL + EditOp + LLM-feedable patches + multi-tenant API) stays where it is. The World abstraction inherits the runtime track records of mature engines.
-- Five compelling adapters out of the box: `world-openworkflow-pg` (current default), `world-openworkflow-sqlite` (dev), `world-wdk-postgres` (Postgres via WDK), `world-cloudflare`, `world-inngest`.
+- Thodare's value (JSON DSL + EditOp + LLM-feedable patches + multi-tenant API) stays where it is. The Backend abstraction inherits the runtime track records of mature engines.
+- Five compelling adapters out of the box: `backend-openworkflow-pg` (current default), `backend-openworkflow-sqlite` (dev), `backend-wdk-postgres` (Postgres via WDK), `backend-cloudflare`, `backend-inngest`.
 - No need to ship/maintain a custom runtime.
 - Clean ports & adapters: the seam matches existing internal `step: any` boundary.
 
@@ -163,9 +163,9 @@ interface Streamer { writeStream, readStream }
 interface SecretVault { storeCredential, fetchCredential }
 ```
 
-A "complete" World implements all traits. A degraded backend (e.g., a pure queue + nothing else) implements only what it can. Thodare detects missing traits and either degrades gracefully or refuses to register the workflow.
+A "complete" Backend implements all traits. A degraded backend (e.g., a pure queue + nothing else) implements only what it can. Thodare detects missing traits and either degrades gracefully or refuses to register the workflow.
 
-**Pros:** Maximum flexibility. Can support odd backends (a pure SQS World? a pure DO World?).
+**Pros:** Maximum flexibility. Can support odd backends (a pure SQS Backend? a pure DO Backend?).
 
 **Cons:** Complexity explosion. Hard to write coherent docs ("which traits do I need for X?"). Hard to test (matrix grows multiplicatively). Hard to keep consistent across engines. Punishes the common 95% case to support a 5% case nobody asked for.
 
@@ -178,12 +178,12 @@ A "complete" World implements all traits. A degraded backend (e.g., a pure queue
 - The seam is at the right level: Thodare wraps existing durable engines instead of competing with them.
 - Surface is small enough to document on one page.
 - Five strong adapters can ship in v0.2:
-  - `@thodare/world-openworkflow-pg` (current default, no behavior change for existing users)
-  - `@thodare/world-openworkflow-sqlite` (dev / local — for `thodare dev` ergonomics)
-  - `@thodare/world-cloudflare` (CF Workflows + Queues + DO storage)
-  - `@thodare/world-vercel-wdk` (lifts WDK's Vercel/Postgres/Local worlds for free)
-  - `@thodare/world-inngest` (managed serverless story for users on Inngest already)
+  - `@thodare/backend-openworkflow-pg` (current default, no behavior change for existing users)
+  - `@thodare/backend-openworkflow-sqlite` (dev / local — for `thodare dev` ergonomics)
+  - `@thodare/backend-cloudflare` (CF Workflows + Queues + DO storage)
+  - `@thodare/backend-vercel-wdk` (lifts WDK's Vercel/Postgres/Local backends for free)
+  - `@thodare/backend-inngest` (managed serverless story for users on Inngest already)
 - Capability flags solve adapter-variance pragmatically without trait explosion.
-- Door stays open for Alternative A later — a `@thodare/world-native` that owns its own durability — but only when there's a clear gap nothing else fills (probably never).
+- Door stays open for Alternative A later — a `@thodare/backend-native` that owns its own durability — but only when there's a clear gap nothing else fills (probably never).
 
 The crucial insight: **Thodare's bet is the JSON+EditOp+multi-tenant-API surface, not the durable runtime.** Adopting B keeps the bet pure and inherits the runtime work of every engine in the ecosystem. Adopting A would be a strategic blunder dressed as engineering rigor.

@@ -1,8 +1,8 @@
 # Developer Blueprint — Thodare in the v2 ideal world
 
-> **Status:** end-to-end DX walkthrough. Author: Claude, this session. Audience: the maintainer evaluating "is this proposal worth building." Companion to `world-abstraction-proposal.md`. No code in this document is real (the proposal is unbuilt); every snippet shows what the v2-shaped surface would look like.
+> **Status:** end-to-end DX walkthrough. Author: Claude, this session. Audience: the maintainer evaluating "is this proposal worth building." Companion to `backend-abstraction-proposal.md`. No code in this document is real (the proposal is unbuilt); every snippet shows what the v2-shaped surface would look like.
 
-This document answers one question: **once the World abstraction + Credential primitive + headless-substrate plumbing land, what does it actually feel like to use Thodare?** Five personas, in order of escalating depth.
+This document answers one question: **once the Backend abstraction + Credential primitive + headless-substrate plumbing land, what does it actually feel like to use Thodare?** Five personas, in order of escalating depth.
 
 - **§1 Persona A — Hacker on a laptop.** First five minutes.
 - **§2 Persona B — Platform engineer.** Ship a Postgres-backed internal-ops service.
@@ -10,7 +10,7 @@ This document answers one question: **once the World abstraction + Credential pr
 - **§4 Persona D — Visual-builder founder.** "I'm building an n8n for sales ops on Thodare."
 - **§5 Persona E — Migration team.** Move a workload from Postgres to Cloudflare without rewriting workflows.
 
-Common thread: **same JSON, same EditOp loop, same connectors, same API.** What changes is the World underneath.
+Common thread: **same JSON, same EditOp loop, same connectors, same API.** What changes is the Backend underneath.
 
 ---
 
@@ -41,9 +41,9 @@ The scaffold is intentionally tiny. `thodare.config.ts`:
 import { defineConfig } from "@thodare/cli";
 
 export default defineConfig({
-  // Default World is `world-openworkflow-sqlite` — zero config, zero deps, runs on a single
+  // Default Backend is `backend-openworkflow-sqlite` — zero config, zero deps, runs on a single
   // SQLite file at .thodare/local.db. Suitable for `thodare dev` and `thodare run` only.
-  world: "openworkflow-sqlite",
+  backend: "openworkflow-sqlite",
 });
 ```
 
@@ -75,7 +75,7 @@ export default defineWorkflow("hello")
 ```sh
 $ cd my-app && pnpm install
 $ thodare dev
-✓ World: openworkflow-sqlite (.thodare/local.db)
+✓ Backend: openworkflow-sqlite (.thodare/local.db)
 ✓ API:    http://localhost:3000
 ✓ Loaded 1 workflow: hello
 ✓ Loaded 1 connector: greet
@@ -123,7 +123,7 @@ That is the entire local-dev experience. **Zero accounts, zero cloud, zero docke
 
 **Goal.** Ship a Postgres-backed durable workflow service for internal tools at a real company. Multi-tenant (one org per team). OAuth-connected to Slack + GitHub. Production-ready.
 
-### 2.1 Pick the World
+### 2.1 Pick the Backend
 
 Edit `thodare.config.ts`:
 
@@ -131,7 +131,7 @@ Edit `thodare.config.ts`:
 import { defineConfig } from "@thodare/cli";
 
 export default defineConfig({
-  world: {
+  backend: {
     id: "openworkflow-pg",
     options: {
       databaseUrl: process.env.DATABASE_URL,         // postgres://...
@@ -146,7 +146,7 @@ export default defineConfig({
 });
 ```
 
-The `world.id` switch is the only adapter-level change. The `world-openworkflow-pg` package validates the connection string + runs migrations on first boot.
+The `backend.id` switch is the only adapter-level change. The `backend-openworkflow-pg` package validates the connection string + runs migrations on first boot.
 
 ### 2.2 Define a connector with a credential
 
@@ -303,7 +303,7 @@ event: run_completed
 data: {"runId":"wrun_01HQX...","status":"completed"}
 ```
 
-This is the SSE endpoint gated by `world.capabilities.supportsLiveSubscription`. `world-openworkflow-pg` implements it via Postgres LISTEN/NOTIFY (per WDK's pattern at `world-postgres/src/streamer.ts:108`).
+This is the SSE endpoint gated by `backend.capabilities.supportsLiveSubscription`. `backend-openworkflow-pg` implements it via Postgres LISTEN/NOTIFY (per WDK's pattern at `backend-postgres/src/streamer.ts:108`).
 
 ### 2.7 Recover a failed run
 
@@ -321,7 +321,7 @@ $ thodare runs recover wrun_01HQY...
 ✓ Run wrun_01HQY... recovered (failed → pending)
 ```
 
-Both endpoints (`POST /api/runs/:id/resume?step=...`, `POST /api/runs/:id/recover`) are gated by capability flags — `world-openworkflow-pg` declares both `true`; `world-cloudflare-dynamic` declares `false` (CF Workflows requires re-create, see §5.3).
+Both endpoints (`POST /api/runs/:id/resume?step=...`, `POST /api/runs/:id/recover`) are gated by capability flags — `backend-openworkflow-pg` declares both `true`; `backend-cloudflare-dynamic` declares `false` (CF Workflows requires re-create, see §5.3).
 
 ---
 
@@ -492,7 +492,7 @@ This is the headline use case the v2 proposal added.
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ Thodare engine + world-openworkflow-pg                          │
+│ Thodare engine + backend-openworkflow-pg                          │
 │   ├─ Postgres (multi-tenant by organization_id)                 │
 │   └─ Worker pods (durable execution, retries, sleeps)           │
 └─────────────────────────────────────────────────────────────────┘
@@ -667,7 +667,7 @@ export default function RunPage({ params: { runId } }: Props) {
 }
 ```
 
-The "Retry from this step" button hits `POST /api/runs/:id/resume?step=<stepId>` (the Rivet-derived `resumeFromStep` primitive from proposal §3.1). On `world-openworkflow-pg` this works natively. On `world-cloudflare-dynamic` the API returns `409` with `capability_unsupported` — the UI hides the button when `world.capabilities.supportsResumeFromStep === false`.
+The "Retry from this step" button hits `POST /api/runs/:id/resume?step=<stepId>` (the Rivet-derived `resumeFromStep` primitive from proposal §3.1). On `backend-openworkflow-pg` this works natively. On `backend-cloudflare-dynamic` the API returns `409` with `capability_unsupported` — the UI hides the button when `backend.capabilities.supportsResumeFromStep === false`.
 
 ### 4.6 Multi-tenant isolation in practice
 
@@ -689,7 +689,7 @@ Vercel for the Next.js frontend    ~$20/mo  (Pro tier)
 Total for the durable backend      ~$130/mo
 ```
 
-The founder's per-customer billing is free of substrate dependence. They could move to `world-cloudflare-dynamic` to flip to per-invocation pricing if a single big customer would benefit. **Substrate swap requires zero customer-facing change.** That's the headless story.
+The founder's per-customer billing is free of substrate dependence. They could move to `backend-cloudflare-dynamic` to flip to per-invocation pricing if a single big customer would benefit. **Substrate swap requires zero customer-facing change.** That's the headless story.
 
 ---
 
@@ -715,7 +715,7 @@ This is the proof-point for the substrate-swap promise.
 import { defineConfig } from "@thodare/cli";
 
 export default defineConfig({
-  world: {
+  backend: {
 -   id: "openworkflow-pg",
 -   options: {
 -     databaseUrl: process.env.DATABASE_URL,
@@ -756,7 +756,7 @@ Published thodare-worker (3.21 sec)
 # 3. Migrate workflow JSON + credentials from Postgres → CF
 $ thodare migrate --from=openworkflow-pg --to=cloudflare-dynamic --dry-run
 ✓ Would migrate 247 workflows
-✓ Would migrate 18 credentials (re-encrypted under target world's KMS)
+✓ Would migrate 18 credentials (re-encrypted under target backend's KMS)
 ✓ Would skip 8,431 historical runs (history stays on the source for 30d)
 
 $ thodare migrate --from=openworkflow-pg --to=cloudflare-dynamic --execute
@@ -765,8 +765,8 @@ $ thodare migrate --from=openworkflow-pg --to=cloudflare-dynamic --execute
 ✓ DNS cutover suggested: api.acme.io → thodare-worker.acme.workers.dev
 
 # 4. Verify the headless-friendliness matrix changed
-$ thodare world inspect
-World:                    cloudflare-dynamic
+$ thodare backend inspect
+Backend:                    cloudflare-dynamic
 Spec version:             3
 Capabilities:
   serverless:             ✅ true
@@ -785,28 +785,28 @@ The "Retry from this step" button in the UI (§4.5) **automatically hides** beca
 ### 5.4 Watching the cutover
 
 ```sh
-# Dual-write window: traffic to both worlds for 24h while in-flight runs drain
-$ thodare runs list --world=openworkflow-pg --status=running
+# Dual-write window: traffic to both backends for 24h while in-flight runs drain
+$ thodare runs list --backend=openworkflow-pg --status=running
 14 in-flight runs (all started before 2026-05-02T15:00Z)
 
 # When count → 0:
-$ thodare runs list --world=openworkflow-pg --status=running
+$ thodare runs list --backend=openworkflow-pg --status=running
 0
 
 # Now safe to decommission
 $ docker compose down  # take down the old Postgres + worker stack
 ```
 
-Per the proposal's `world-postgres → world-local` composition pattern in WDK, dual-running both Worlds during the cutover is supported because the API (mounted on the new Cloudflare Worker) can speak to both at the storage layer for read-through. Writes go to the new world only.
+Per the proposal's `backend-postgres → backend-local` composition pattern in WDK, dual-running both Backends during the cutover is supported because the API (mounted on the new Cloudflare Worker) can speak to both at the storage layer for read-through. Writes go to the new backend only.
 
 ### 5.5 What broke (be honest)
 
 Two things, both pre-flagged by capability flags:
 
 1. **The "Retry from this step" UI button vanished** — capability flag tells the truth; users see a "Retry whole workflow" button instead.
-2. **One of the connectors generates step outputs >1 MiB (Salesforce list-leads with no filter, ~3 MiB for big orgs).** The validator at `applyOperations` time refused to accept the workflow under the new world. Fix: add a `maxItems: 100` param to that connector, or paginate, or spill to R2. The error message is loud and surfaces immediately, before any production traffic hits the new world.
+2. **One of the connectors generates step outputs >1 MiB (Salesforce list-leads with no filter, ~3 MiB for big orgs).** The validator at `applyOperations` time refused to accept the workflow under the new backend. Fix: add a `maxItems: 100` param to that connector, or paginate, or spill to R2. The error message is loud and surfaces immediately, before any production traffic hits the new backend.
 
-**Nothing else broke.** The substrate swap is real because the contract test suite proved it (per proposal §3.7 — both worlds passed the same 19-pack suite).
+**Nothing else broke.** The substrate swap is real because the contract test suite proved it (per proposal §3.7 — both backends passed the same 19-pack suite).
 
 ---
 
@@ -818,12 +818,12 @@ Two things, both pre-flagged by capability flags:
 thodare init                              # scaffold
 thodare dev                               # local sqlite + hot reload
 thodare run <workflow> [--input '{...}']  # one-shot CI
-thodare build --target=<world>            # produce deploy artifact
+thodare build --target=<backend>            # produce deploy artifact
 ```
 
 No `thodare deploy`. No `thodare push`. No `thodare login --browser` (use `thodare login --api=<url>` from the existing CLI). Per Flue's discipline.
 
-### The API surface — same against every World
+### The API surface — same against every Backend
 
 ```
 # Auth
@@ -868,9 +868,9 @@ POST /api/connectors/:type/refresh         # dynamic-schema endpoint (form-state
 # Schedules + webhooks per existing routes
 ```
 
-Every endpoint is org-scoped via the auth-guarded layer. The capability flags determine which endpoints return 200 vs. 409 `capability_unsupported`. The frontend / LLM / API consumer queries the World once at session start (`GET /api/world/capabilities`) and disables UI affordances accordingly.
+Every endpoint is org-scoped via the auth-guarded layer. The capability flags determine which endpoints return 200 vs. 409 `capability_unsupported`. The frontend / LLM / API consumer queries the Backend once at session start (`GET /api/backend/capabilities`) and disables UI affordances accordingly.
 
-### The connector authoring surface — same regardless of World
+### The connector authoring surface — same regardless of Backend
 
 ```ts
 import { defineConnector, defineCredentialType, hidden, userOnly } from "@thodare/engine";
@@ -892,9 +892,9 @@ defineConnector({
 });
 ```
 
-Same code targets every World. The World's capabilities affect what's possible at runtime (max step duration, max output size); the authoring surface is invariant.
+Same code targets every Backend. The Backend's capabilities affect what's possible at runtime (max step duration, max output size); the authoring surface is invariant.
 
-### The workflow JSON wire format — identical across Worlds
+### The workflow JSON wire format — identical across Backends
 
 ```jsonc
 {
@@ -915,18 +915,18 @@ Same code targets every World. The World's capabilities affect what's possible a
 }
 ```
 
-Same JSON, same EditOp loop, same connectors, same API. **What changes is the World underneath.** That's the bet.
+Same JSON, same EditOp loop, same connectors, same API. **What changes is the Backend underneath.** That's the bet.
 
 ---
 
 ## What this blueprint deliberately leaves out
 
-- Internal RFC process (covered in `world-abstraction-proposal.md` §10).
-- Implementation timing (`world-abstraction-proposal.md` §5).
+- Internal RFC process (covered in `backend-abstraction-proposal.md` §10).
+- Implementation timing (`backend-abstraction-proposal.md` §5).
 - Pricing math at scale (`code-reviews/cloudflare-as-world.md`).
 - Why this beats just using Inngest / Trigger / Temporal (`code-reviews/durable-engines-survey.md`).
-- The conformance test suite specs (`world-abstraction-proposal.md` §3.7).
-- Three open decisions for the maintainer (`world-abstraction-proposal.md` §10).
+- The conformance test suite specs (`backend-abstraction-proposal.md` §3.7).
+- Three open decisions for the maintainer (`backend-abstraction-proposal.md` §10).
 
 ---
 

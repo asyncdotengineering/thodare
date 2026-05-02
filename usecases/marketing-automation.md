@@ -298,7 +298,7 @@ Behind the scenes:
 - When a Shopify webhook fires `order_placed` for an Acme customer, JourneyHQ's ingestion endpoint POSTs to `/api/workflows/post-purchase/run` with `{ input: { customerId: "c_abc", order: {...} } }`.
 - Thodare creates one run per qualifying purchase. **Multiple thousand concurrent runs** at peak Shopify traffic.
 - Each `wait_duration` block parks the run via `step.sleep` — no compute consumed during the wait.
-- Each `wait_for_email_event` parks via `step.waitForSignal` correlated to the message id; when SendGrid's webhook reports an open/click/conversion, JourneyHQ's ingestion calls `world.signal(runId, "email_clicked", payload)` to advance.
+- Each `wait_for_email_event` parks via `step.waitForSignal` correlated to the message id; when SendGrid's webhook reports an open/click/conversion, JourneyHQ's ingestion calls `backend.signal(runId, "email_clicked", payload)` to advance.
 - The marketer's drop-off dashboard queries `Storage.steps.list({ workflowId, organizationId })` to compute "50% reach this step, 12% convert" per node.
 
 ## 5. Deployment recommendation
@@ -307,22 +307,22 @@ Three-stage scaling. JourneyHQ would document this for self-hosting customers + 
 
 ### Stage 1 — Pilot / first 50 customers
 
-`world-self-host-postgres`. Single Postgres + 2 worker pods. ~$300/mo. Suitable up to ~10M workflow events/day.
+`backend-self-host-postgres`. Single Postgres + 2 worker pods. ~$300/mo. Suitable up to ~10M workflow events/day.
 
 ### Stage 2 — Growth / 50-500 customers
 
-`world-self-host-postgres` with Postgres scaled out (Aurora Serverless v2 or Neon Pro at ~$500/mo) + 6-12 worker pods. Up to ~100M events/day. Read replicas for the analytics dashboard.
+`backend-self-host-postgres` with Postgres scaled out (Aurora Serverless v2 or Neon Pro at ~$500/mo) + 6-12 worker pods. Up to ~100M events/day. Read replicas for the analytics dashboard.
 
 ### Stage 3 — Scale / 500+ customers, billions of events/month
 
-`world-aws` for high throughput + cost control:
+`backend-aws` for high throughput + cost control:
 - RDS Postgres (db.r6g.4xlarge multi-AZ) for state + analytics.
 - SQS for queue (FIFO per-customer org for ordering).
 - Lambda for step execution (scales to zero between bursts).
 - DynamoDB for per-subscriber state (frequency caps, opt-ins).
 - ClickHouse (separate from Thodare; queried for customer-facing analytics).
 
-OR `world-cloudflare` if global edge ingestion is the priority (CF Workers at the SDK ingestion endpoint). The two adapters are not mutually exclusive — JourneyHQ could run `world-cloudflare` for the trigger ingestion + `world-aws` for the heavy backend orchestration via Thodare's queue federation (deferred to v0.3).
+OR `backend-cloudflare` if global edge ingestion is the priority (CF Workers at the SDK ingestion endpoint). The two adapters are not mutually exclusive — JourneyHQ could run `backend-cloudflare` for the trigger ingestion + `backend-aws` for the heavy backend orchestration via Thodare's queue federation (deferred to v0.3).
 
 ## 6. What Thodare provides vs. what JourneyHQ builds
 
@@ -364,7 +364,7 @@ This use case stresses Thodare more than any other. The proposal v2 already has 
 | **High-cardinality fan-out (segment → millions of runs)** | "Run this flow for every customer in segment X" can mean millions of run dispatches in seconds. Thodare's `runWorkflow` API isn't shaped for that throughput. | **P2** — likely needs a dedicated `runWorkflowBatch(name, inputs[])` API for v0.3 |
 | **Drop-off analytics queries at scale** | Marketer dashboard wants "for this flow over the last 30 days, how many subscribers reached step N, how many converted at step N+1, average time between, etc." Thodare's `Storage.steps.list` returns rows; analytics need OLAP queries. | **P3** — JourneyHQ pipes `step_completed` events to ClickHouse; document the pattern |
 | **A/B testing primitive** | Currently can be expressed via a custom `random_split` block; could be an engine-level concept that auto-tracks variant performance. | **P3** — leave to userland |
-| **Send-time scheduling at the queue layer** | "Schedule this email for delivery at exactly 2026-05-15T14:00:00Z" needs the queue to honor `delaySeconds` precisely. Both `world-self-host-postgres` and `world-cloudflare` support this. | works today |
+| **Send-time scheduling at the queue layer** | "Schedule this email for delivery at exactly 2026-05-15T14:00:00Z" needs the queue to honor `delaySeconds` precisely. Both `backend-self-host-postgres` and `backend-cloudflare` support this. | works today |
 
 ## 8. The five-line pitch JourneyHQ puts on its homepage
 

@@ -1,6 +1,6 @@
 # Thodare use cases
 
-> Concrete product shapes that Thodare is designed to be the substrate for. Authored 2026-05-02 alongside the World abstraction proposal. **Not a customer list** — these are *categories of products* a developer could build on top of Thodare.
+> Concrete product shapes that Thodare is designed to be the substrate for. Authored 2026-05-02 alongside the Backend abstraction proposal. **Not a customer list** — these are *categories of products* a developer could build on top of Thodare.
 
 The pattern these share: **the product IS the user-defined workflow engine.** A marketer at the customer's company drags steps onto a canvas; the system runs them durably, conditionally, multi-channel, over weeks.
 
@@ -15,7 +15,7 @@ The pattern these share: **the product IS the user-defined workflow engine.** A 
 
 ## Why these use cases matter for the proposal
 
-The World abstraction proposal (`research/world-abstraction-proposal.md`) frames Thodare as having **two consumers, one substrate**:
+The Backend abstraction proposal (`research/backend-abstraction-proposal.md`) frames Thodare as having **two consumers, one substrate**:
 
 1. The LLM patches workflow JSON via `EditOp[]`.
 2. The **developer building a visual workflow product** consumes Thodare's HTTP API as the durable backend.
@@ -28,7 +28,7 @@ Each use case is structured the same way:
 2. **Why it's workflow-shaped** — the load-bearing argument
 3. **The founder's POV** — what they define, what they don't have to build
 4. **The end user's POV** — what the marketer sees in the canvas
-5. **Deployment recommendation** — which World, why
+5. **Deployment recommendation** — which Backend, why
 6. **What Thodare provides vs. what the founder builds**
 7. **Open gaps** — what's missing in Thodare today that this use case needs
 
@@ -38,6 +38,6 @@ Read [`notification-platform.md`](./notification-platform.md) first — it's the
 
 ## Cross-references
 
-- `research/world-abstraction-proposal.md` — the substrate that powers all three use cases
+- `research/backend-abstraction-proposal.md` — the substrate that powers all three use cases
 - `research/developer-blueprint.md` §4 (Persona D) — the visual-builder founder pattern these use cases instantiate
 - `research/code-reviews/visual-builder-substrates.md` — n8n / ActivePieces / Sim Studio analysis that informs which Thodare gaps these use cases also need closed

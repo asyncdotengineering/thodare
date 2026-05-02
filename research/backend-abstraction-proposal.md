@@ -1,10 +1,10 @@
-# Thodare World Abstraction — Proposal v2
+# Thodare Backend Abstraction — Proposal v2
 
-> **Status:** research-grade proposal. Author: Claude (this session). Audience: Mithushan + the next session that opens an RFC at `rfcs/world-abstraction/`. Scope: architectural, not implementation.
+> **Status:** research-grade proposal. Author: Claude (this session). Audience: Mithushan + the next session that opens an RFC at `rfcs/backend-abstraction/`. Scope: architectural, not implementation.
 >
-> **v2 changes from v1.** Folds in 7 deep code reviews (~46k words) of `vercel/workflow`, `vercel/workflow-examples`, `vercel-labs/workflow-builder-template`, `cloudflare/dynamic-workflows`, `withastro/flue`, `rivet-gg/rivet`, plus n8n/ActivePieces/Sim Studio. v1 stays at `world-abstraction-proposal.v1.md` for diffability.
+> **v2 changes from v1.** Folds in 7 deep code reviews (~46k words) of `vercel/workflow`, `vercel/workflow-examples`, `vercel-labs/workflow-builder-template`, `cloudflare/dynamic-workflows`, `withastro/flue`, `rivet-gg/rivet`, plus n8n/ActivePieces/Sim Studio. v1 stays at `backend-abstraction-proposal.v1.md` for diffability.
 
-**One-line summary.** **Port the World abstraction itself** (three-port composition, append-only event log + materialized views, conformance suite, branded spec versions) — not as a wrapper for any single existing engine, but as Thodare's own substrate contract. Ship 5 first-party adapters that cover serverless / managed / self-host / dev. Add a first-class **Credential** primitive in v0.2 so the headless-substrate goal is real. Adopt Flue's three-verb CLI + no-`deploy` discipline. Fix the SPEC.md EditOp documentation drift. The JSON+EditOp surface stays untouched.
+**One-line summary.** **Port the Backend abstraction itself** (three-port composition, append-only event log + materialized views, conformance suite, branded spec versions) — not as a wrapper for any single existing engine, but as Thodare's own substrate contract. Ship 5 first-party adapters that cover serverless / managed / self-host / dev. Add a first-class **Credential** primitive in v0.2 so the headless-substrate goal is real. Adopt Flue's three-verb CLI + no-`deploy` discipline. Fix the SPEC.md EditOp documentation drift. The JSON+EditOp surface stays untouched.
 
 ---
 
@@ -17,12 +17,12 @@ Thodare is a **self-hostable, open-source, headless workflow orchestration engin
 1. **The LLM** patches workflow JSON via `EditOp[]` (skip-don't-reject) and reads back run output.
 2. **The developer building a visual workflow product** (an n8n-class / ActivePieces-class / Sim-Studio-class application) consumes Thodare's HTTP API as the durable backend behind their own UI, their own brand, their own connector library.
 
-Both consumers depend on the same substrate. The **World abstraction** makes the substrate pluggable so the same workflow JSON + the same EditOp surface runs against:
+Both consumers depend on the same substrate. The **Backend abstraction** makes the substrate pluggable so the same workflow JSON + the same EditOp surface runs against:
 
 - **Postgres self-host** (the current openworkflow path; default for v0.2)
 - **SQLite** for `thodare dev` / single-binary local
 - **Cloudflare Workflows + dynamic-workflows** for serverless-managed
-- **Vercel WDK** (lifts WDK's 7 official + community Worlds via one adapter)
+- **Vercel WDK** (lifts WDK's 7 official + community Backends via one adapter)
 - **Inngest** for users already on Inngest
 - *(later)* **Rivet's `@rivetkit/workflow-engine`** — adapter is more tractable than v1 implied
 
@@ -45,7 +45,7 @@ This is the load-bearing observation that justifies the timing. Reinforced by de
 
 The convergence is not coincidence. It's the natural shape of "durable workflow execution at multi-tenant scale where workflows are dynamic." The CF library is **300 LoC, MIT, and shipped one day before this proposal** — a free architectural validation Thodare gets to absorb without writing a line.
 
-**Material implication:** the World contract Thodare adopts should be aligned with this pattern, because every adapter Thodare ships will use it (including the openworkflow adapter, which already does).
+**Material implication:** the Backend contract Thodare adopts should be aligned with this pattern, because every adapter Thodare ships will use it (including the openworkflow adapter, which already does).
 
 ---
 
@@ -87,7 +87,7 @@ The full 15-item list is in `code-reviews/visual-builder-substrates.md:§4.5`. *
 - **Source truth (`packages/engine/src/types.ts:213-237`):** `add` / `edit` / `delete` / `connect` / `disconnect`
 - **`SPEC.md:55` (wrong):** `add` / `update` / `remove` / `connect` / `disconnect`
 
-This is documentation drift. Worse: v1 of this proposal carried the wrong names from SPEC.md. v2 uses the correct names throughout. **Action: SPEC.md needs a one-line correction in the same RFC that lands the World abstraction.**
+This is documentation drift. Worse: v1 of this proposal carried the wrong names from SPEC.md. v2 uses the correct names throughout. **Action: SPEC.md needs a one-line correction in the same RFC that lands the Backend abstraction.**
 
 Bonus EditOp finding: **Thodare has 5 ops; Sim Studio has 5 ops; only 3 of 5 are Thodare-original**. Sim's are `add` / `edit` / `delete` / `insert_into_subflow` / `extract_from_subflow` — Sim has no `connect`/`disconnect` at all (connections are embedded in `add.params.connections`). The "heavily inspired by Sim Studio" lineage diverged on subflow vs. edge ops. Thodare's flat-graph model is arguably better for the LLM-feedable surface; Sim's nesting model is required for container-blocks support (P1 above). Both can coexist — keep `connect`/`disconnect`, add `insert_into_subflow`/`extract_from_subflow` if/when container blocks ship.
 
@@ -97,18 +97,18 @@ Bonus EditOp finding: **Thodare has 5 ops; Sim Studio has 5 ops; only 3 of 5 are
 
 Three alternatives were sketched in `_scratch-interface-design.md`. v1 recommended **Alternative B** (thin engine adapter wrap). The deep reviews refine that recommendation:
 
-> **Port the World abstraction *itself* (the three-port composition + event-sourcing + conformance-suite pattern from WDK), but ship adapters that wrap existing engines for v0.2.** The interface SHAPE is WDK's; the implementation strategy still wraps engines so we inherit their runtime track records.
+> **Port the Backend abstraction *itself* (the three-port composition + event-sourcing + conformance-suite pattern from WDK), but ship adapters that wrap existing engines for v0.2.** The interface SHAPE is WDK's; the implementation strategy still wraps engines so we inherit their runtime track records.
 
-This is the WDK reviewer's verbatim recommendation: *"Thodare ports the World abstraction itself ... but does not adopt the JS-source-code workflow definition. That gives Thodare engine portability (PG, SQLite, CF, Lambda, etc.) without paying the SWC/VM tax."*
+This is the WDK reviewer's verbatim recommendation: *"Thodare ports the Backend abstraction itself ... but does not adopt the JS-source-code workflow definition. That gives Thodare engine portability (PG, SQLite, CF, Lambda, etc.) without paying the SWC/VM tax."*
 
-### 3.1 The `World` interface (informative — not a code change)
+### 3.1 The `Backend` interface (informative — not a code change)
 
-Mirrors WDK's three-port composition (`packages/world/src/interfaces.ts:240-307`), with adjustments for Thodare's JSON+EditOp surface:
+Mirrors WDK's three-port composition (`packages/backend/src/interfaces.ts:240-307`), with adjustments for Thodare's JSON+EditOp surface:
 
 ```ts
-interface ThodareWorld extends Storage, Queue, Streamer {
+interface ThodareBackend extends Storage, Queue, Streamer {
   readonly id: string;                // "openworkflow-pg" | "wdk" | "cloudflare-dynamic" | ...
-  readonly capabilities: WorldCapabilities;
+  readonly capabilities: BackendCapabilities;
   readonly specVersion?: SpecVersion; // branded — see §3.4
 
   // Lifecycle
@@ -139,7 +139,7 @@ interface Storage {
   // All state changes flow through events.create()
 }
 
-// Queue — push OR pull, the World declares which
+// Queue — push OR pull, the Backend declares which
 interface Queue {
   mode: "push" | "pull" | "embedded";  // see §3.3 — divergence from WDK
   queue(name: ValidQueueName, payload: QueuePayload, opts?: QueueOptions): Promise<{ messageId: MessageId | null }>;
@@ -161,7 +161,7 @@ interface ThodareCtx {
   input: unknown;
   step: ThodareStep;
   runId: string;
-  signal: AbortSignal;        // canceled when world.cancel(runId) is called
+  signal: AbortSignal;        // canceled when backend.cancel(runId) is called
   log: ThodareLogger;
 }
 
@@ -175,7 +175,7 @@ interface ThodareStep {
 }
 
 // Capability flags — adapter declares what's true
-interface WorldCapabilities {
+interface BackendCapabilities {
   // Runtime
   maxStepDurationMs: number;            // 15min Lambda, 30s Workers, ∞ self-host
   maxRunDurationMs: number;             // ∞ for most managed
@@ -198,7 +198,7 @@ interface WorldCapabilities {
 }
 ```
 
-**Total surface: 8 World methods + 4 Step methods + ~17 capability flags.** Each capability flag explicitly documents an axis where adapters differ — no hidden behavior.
+**Total surface: 8 Backend methods + 4 Step methods + ~17 capability flags.** Each capability flag explicitly documents an axis where adapters differ — no hidden behavior.
 
 ### 3.2 What's lifted from WDK verbatim, what diverges
 
@@ -206,38 +206,38 @@ interface WorldCapabilities {
 
 | WDK pattern | Source | Why |
 |---|---|---|
-| `World extends Queue, Streamer, Storage` composition | `interfaces.ts:240` | Three orthogonal capability sets, each can be wrapped/instrumented separately. The right level of granularity. |
+| `Backend extends Queue, Streamer, Storage` composition | `interfaces.ts:240` | Three orthogonal capability sets, each can be wrapped/instrumented separately. The right level of granularity. |
 | Append-only event log + read-only materialized views | `interfaces.ts:118-132` | Makes replay possible; makes resilient-start possible; makes hooks auto-disposable on terminal state; makes audit + observability free. |
 | `events.create()` is the ONLY mutation surface | `interfaces.ts:187-228` | Forces every state change through one chokepoint; testable, auditable, encryptable. |
 | Branded `SpecVersion` type with cascade resolution | `spec-version.ts:22-29`, `start.ts:180-183` | Forward/backward compat without per-field-flag guards. |
 | `EventResult.events?: Event[]` TTFB optimization | `events.ts:374-391` | Server pre-pays the first `list` call when responding to `run_started`. |
-| `recovery.ts:reenqueueActiveRuns()` as a shared function | `recovery.ts:14-49` | Idempotent crash recovery; Worlds call from `start()`. |
+| `recovery.ts:reenqueueActiveRuns()` as a shared function | `recovery.ts:14-49` | Idempotent crash recovery; Backends call from `start()`. |
 | Encryption opt-in via `?.()` on optional method | `interfaces.ts:280-307`, `start.ts:193-197` | Zero ceremony, zero coupling, plug a KMS in later. Per-run keys via HKDF. |
 | `Symbol.for()` cross-realm registries | `spec.md:103-119` | Cross-bundle steps register without depending on `@workflow/core`. |
 | `MessageId` as branded type | `queue.ts:12-15` | Callers cannot fabricate. |
 | Resilient-start path: `Promise.allSettled([events.create, queue.send])` | `start.ts:219-256` | If `events.create` fails with 429/5xx, queue carries `runInput` and server materializes on `run_started`. |
-| Conformance test suite as a published package | `world-testing/createTestSuite(pkgName)` | Community Worlds prove validity by passing; living documentation. |
+| Conformance test suite as a published package | `backend-testing/createTestSuite(pkgName)` | Community Backends prove validity by passing; living documentation. |
 
 **Deliberately diverging from WDK:**
 
-1. **JSON+EditOp surface, not directives.** WDK is JS-source-as-workflow-definition with SWC plugin + `vm.Context` deterministic replay. Thodare's bet is JSON. **Don't be tempted to add `'use workflow'` directives** — the moment you do, you owe the user the SWC plugin, dual bundles, vm sandbox, and the loop closes around the LLM-feedable surface. (`world-wdk` adapter exists *precisely* so users who want directives can have them — without polluting Thodare's own surface.)
-2. **Push OR pull queue mode** (per `World.Queue.mode`). WDK's `createQueueHandler` returns an HTTP handler — push-only. That doesn't fit pull-only substrates (SQS, Kafka, NATS JetStream, Redis Streams). Thodare adds `next?(prefix)` so pull-only adapters work without an embedded HTTP server.
+1. **JSON+EditOp surface, not directives.** WDK is JS-source-as-workflow-definition with SWC plugin + `vm.Context` deterministic replay. Thodare's bet is JSON. **Don't be tempted to add `'use workflow'` directives** — the moment you do, you owe the user the SWC plugin, dual bundles, vm sandbox, and the loop closes around the LLM-feedable surface. (`backend-wdk` adapter exists *precisely* so users who want directives can have them — without polluting Thodare's own surface.)
+2. **Push OR pull queue mode** (per `Backend.Queue.mode`). WDK's `createQueueHandler` returns an HTTP handler — push-only. That doesn't fit pull-only substrates (SQS, Kafka, NATS JetStream, Redis Streams). Thodare adds `next?(prefix)` so pull-only adapters work without an embedded HTTP server.
 3. **First-class `Credential` artifact** (lifted from n8n / ActivePieces, not WDK). See §3.5.
 4. **`removed` entry kind** (lifted from Rivet, not WDK). See §3.6.
-5. **`resumeFromStep` and `recover` as first-class World methods** (lifted from Rivet's `replayWorkflowFromStep` + `recover`, not WDK). Required for headless-builder UIs (P1 in §2.4).
+5. **`resumeFromStep` and `recover` as first-class Backend methods** (lifted from Rivet's `replayWorkflowFromStep` + `recover`, not WDK). Required for headless-builder UIs (P1 in §2.4).
 6. **`getWriter(channel?)` — named multi-channel writables.** WDK's `getWritable<T>()` is single-channel per run. Workflow-builder review confirmed that flight-booking-app already hacks an `envelope` field to multiplex — single channel leaks. Thodare's writers are per-channel from day one.
 7. **`step.sleep` accepts `Date`** (kitchen-sink confirms WDK supports this; Thodare should too). Birthday-card / scheduled-send patterns. Also support `step.sleepUntil(name, ts)` for clarity.
-8. **Don't hardcode in-process HTTP fanout in the way WDK's `world-postgres` reuses `world-local`.** Clever but unprincipled — couples Postgres mode to localhost HTTP loopback, awkward in serverless or multi-replica. Thodare splits Engine (durability) from Dispatcher (in-process / HTTP / RPC) explicitly.
+8. **Don't hardcode in-process HTTP fanout in the way WDK's `backend-postgres` reuses `backend-local`.** Clever but unprincipled — couples Postgres mode to localhost HTTP loopback, awkward in serverless or multi-replica. Thodare splits Engine (durability) from Dispatcher (in-process / HTTP / RPC) explicitly.
 
 ### 3.3 Push vs. pull — the divergence that matters
 
-WDK's queue is push-only (`createQueueHandler` returns `(req: Request) => Promise<Response>`). The substrate POSTs messages to the well-known route. This works for serverless (Vercel queue → function invoke), graphile-worker (embeds fetch loop), and in-process. **It does not work cleanly for substrates that are pull-only** (SQS, Kafka, Redis Streams, NATS JetStream) without an embedded HTTP server inside the World.
+WDK's queue is push-only (`createQueueHandler` returns `(req: Request) => Promise<Response>`). The substrate POSTs messages to the well-known route. This works for serverless (Vercel queue → function invoke), graphile-worker (embeds fetch loop), and in-process. **It does not work cleanly for substrates that are pull-only** (SQS, Kafka, Redis Streams, NATS JetStream) without an embedded HTTP server inside the Backend.
 
 Thodare's `Queue.mode` declaration:
 
 - `"push"` — adapter exposes `createQueueHandler(prefix, handler)` returning a Web `(req: Request) => Promise<Response>`. Mounted by the framework integration. WDK pattern.
 - `"pull"` — adapter exposes `next(prefix)` returning the next message (or `null` after timeout). The runtime drives a fetch loop. SQS / Kafka / NATS pattern.
-- `"embedded"` — adapter dispatches in-process; no HTTP loopback. World-local pattern + the `LocalWorld.registerHandler()` shape.
+- `"embedded"` — adapter dispatches in-process; no HTTP loopback. Backend-local pattern + the `LocalWorld.registerHandler()` shape.
 
 A capability flag (`queue.mode`) lets the runtime pick the right driver. The contract test suite has separate test packs per mode.
 
@@ -251,7 +251,7 @@ export const SPEC_VERSION_SUPPORTS_CREDENTIALS      = 3 as SpecVersion;  // Thod
 export const SPEC_VERSION_CURRENT                   = SPEC_VERSION_SUPPORTS_CREDENTIALS as SpecVersion;
 ```
 
-Cascade: `opts.specVersion ?? world.specVersion ?? SPEC_VERSION_SUPPORTS_EVENT_SOURCING`. Brand forces import-of-constant. Helpers `isLegacySpecVersion(v)` and `requiresNewerWorld(v)`. Costs nothing now; expensive to retrofit later.
+Cascade: `opts.specVersion ?? backend.specVersion ?? SPEC_VERSION_SUPPORTS_EVENT_SOURCING`. Brand forces import-of-constant. Helpers `isLegacySpecVersion(v)` and `requiresNewerWorld(v)`. Costs nothing now; expensive to retrofit later.
 
 ### 3.5 First-class `Credential` artifact — the visual-builder substrate
 
@@ -307,9 +307,9 @@ defineConnector({
 ```
 The `credentialId` is the only way the LLM can reference a credential. The actual secret never reaches the LLM, never appears in workflow JSON, never logs.
 
-This pattern matches **n8n's `ICredentialType.authenticate` declarative signing** (`packages/nodes-base/credentials/SlackApi.credentials.ts`) and **ActivePieces' `PieceAuth.OAuth2 / SecretText / BasicAuth / CustomAuth`** (`packages/pieces/framework/src/lib/property/authentication/index.ts:10-74`). It does **not** match Vercel WDK (which has no credential model) — `world-wdk` adapter handles credentials at the Thodare layer and injects them into WDK steps via the same `ctx.credential` shim.
+This pattern matches **n8n's `ICredentialType.authenticate` declarative signing** (`packages/nodes-base/credentials/SlackApi.credentials.ts`) and **ActivePieces' `PieceAuth.OAuth2 / SecretText / BasicAuth / CustomAuth`** (`packages/pieces/framework/src/lib/property/authentication/index.ts:10-74`). It does **not** match Vercel WDK (which has no credential model) — `backend-wdk` adapter handles credentials at the Thodare layer and injects them into WDK steps via the same `ctx.credential` shim.
 
-**This is the P0 unblock for the headless-substrate goal.** Without it, no n8n-class / AP-class / Sim-class application can be built on Thodare without reinventing this. Ship in v0.2 alongside the World abstraction, NOT deferred.
+**This is the P0 unblock for the headless-substrate goal.** Without it, no n8n-class / AP-class / Sim-class application can be built on Thodare without reinventing this. Ship in v0.2 alongside the Backend abstraction, NOT deferred.
 
 ### 3.6 The `removed` entry kind — Rivet's gift
 
@@ -332,7 +332,7 @@ interface SerializedWorkflow {
 
 When the runtime walker encounters a tombstone during replay, it advances past it without dispatching to a tool. Replays for in-flight runs that snapshotted the *original* JSON (T4) never see tombstones; replays for runs that resumed against an evolved workflow do. This solves the "we deleted a block but a run is mid-flight" problem cleanly, without leaking implementation details to the LLM.
 
-### 3.7 Conformance test suite — `@thodare/world-contract-tests`
+### 3.7 Conformance test suite — `@thodare/backend-contract-tests`
 
 Lift WDK's `@workflow/world-testing` shape verbatim (`createTestSuite(pkgName)`). Every adapter passes the same suite, parameterized over the adapter under test. Test packs:
 
@@ -340,8 +340,8 @@ Lift WDK's `@workflow/world-testing` shape verbatim (`createTestSuite(pkgName)`)
 1. **Happy-path** — define → run → step → result → assert output.
 2. **Replay determinism** — crash mid-run, restart, assert no duplicate side effects.
 3. **Sleep precision** — `step.sleep("60s")` resumes within `[60s, 60s + signalPrecision-allowed slack]`.
-4. **Signal delivery** — `world.signal(runId, name, payload)` resumes a `step.waitForSignal` within slack.
-5. **Cancellation** — `world.cancel(runId)` causes `ctx.signal.aborted === true` in the orchestrator.
+4. **Signal delivery** — `backend.signal(runId, name, payload)` resumes a `step.waitForSignal` within slack.
+5. **Cancellation** — `backend.cancel(runId)` causes `ctx.signal.aborted === true` in the orchestrator.
 6. **Multi-tenant isolation (T11)** — runs from different `organizationId`s never cross.
 7. **Idempotency** — same `idempotencyKey` returns the same `runId`.
 8. **Capability honesty** — assertions gated by adapter's declared capabilities (skipped if `capabilities.supportsStreams === false`).
@@ -351,8 +351,8 @@ Lift WDK's `@workflow/world-testing` shape verbatim (`createTestSuite(pkgName)`)
 **Headless-builder pack (gated by `supportsLiveSubscription` etc.):**
 11. **Live subscription** — subscribe to run events; receive `step_started` / `step_completed` / `step_failed` for every step in order, within `liveSubscriptionLatencyMs` slack.
 12. **Step IO inspection** — list steps for a run; assert each has input + output + duration + status.
-13. **Resume from step** — `world.resumeFromStep(runId, stepId)` → prior steps NOT re-executed; resumed step receives the original input.
-14. **Recover from failed** — `world.recover(runId)` flips terminal-failed run to pending, retries; succeeds.
+13. **Resume from step** — `backend.resumeFromStep(runId, stepId)` → prior steps NOT re-executed; resumed step receives the original input.
+14. **Recover from failed** — `backend.recover(runId)` flips terminal-failed run to pending, retries; succeeds.
 15. **Connector metadata richness** — `GET /api/connectors/:type` returns enough metadata for an n8n-style node panel (label, description, type, options, conditional visibility).
 16. **Credential round-trip** — create credential, reference by id in workflow JSON, run; assert tool received `ctx.credential` and the secret never appeared in logs / events / API responses.
 17. **NDJSON op-stream** — `POST /api/workflows/:id/operations?stream=ndjson` returns one JSON object per applied/skipped op as the batch processes.
@@ -387,7 +387,7 @@ interface SerializedBlock {
 
 **Validator behavior:** `applyOperations` validates `params` strictly (against the connector's Zod schema) and accepts `rawConfig` as opaque JSON. At run time, `rawConfig` overrides matching keys in `params`. Audit-log every `rawConfig` use so security review can catch credential-leak attempts.
 
-**Adapter scope:** The escape hatch belongs at the wire format, not the World layer. Every World sees the merged result; the World does not need to know `rawConfig` exists.
+**Adapter scope:** The escape hatch belongs at the wire format, not the Backend layer. Every Backend sees the merged result; the Backend does not need to know `rawConfig` exists.
 
 ### 3.9 Cross-workflow references — Encore's `X.named()` distinction
 
@@ -435,35 +435,35 @@ Per `code-reviews/kapso.md` §8a — Kapso's `kapso-workflows/src/json.ts` produ
 
 ## 4. The adapter roster v2
 
-### 4.1 Ships in v0.2 (the headline release) — platform-native worlds
+### 4.1 Ships in v0.2 (the headline release) — platform-native backends
 
-**Architectural principle (refined post-v2):** **one native World per platform, each composed of that platform's own primitives.** Not a wrapper around another framework's runtime. Same shape as Flue's "Deploy Anywhere" matrix — Cloudflare gets a Cloudflare-native World using CF Workflows / Queues / DO / D1 directly; Vercel gets a Vercel-native World using Vercel Postgres / Blob / Cron / Functions directly; etc. No transitive dependency on another framework's evolution; platform-native pricing, semantics, deploy tools, and debugging all surface to the user unchanged.
+**Architectural principle (refined post-v2):** **one native Backend per platform, each composed of that platform's own primitives.** Not a wrapper around another framework's runtime. Same shape as Flue's "Deploy Anywhere" matrix — Cloudflare gets a Cloudflare-native Backend using CF Workflows / Queues / DO / D1 directly; Vercel gets a Vercel-native Backend using Vercel Postgres / Blob / Cron / Functions directly; etc. No transitive dependency on another framework's evolution; platform-native pricing, semantics, deploy tools, and debugging all surface to the user unchanged.
 
 | Package | Platform | Composed from (the platform's own primitives) | LoC estimate |
 |---|---|---|---|
-| `@thodare/world-self-host-postgres` | **Self-host** (Node + Postgres) — default for v0.2 | Postgres + worker container; deployable to Fly / Railway / Render / VPS / on-prem | ~150 |
-| `@thodare/world-self-host-sqlite` | **Single-binary local** for `thodare dev` and demos | SQLite + in-process worker | ~50 |
-| `@thodare/world-cloudflare` | **Cloudflare-native** | CF Workflows + Queues + DO + D1 + R2. Uses `cloudflare/dynamic-workflows@^0.1.1` *internally* for tenant routing (implementation detail, not exposed). | **~150** |
-| `@thodare/world-vercel` | **Vercel-native** | Vercel Postgres (Neon) + Vercel Blob + Vercel Cron + Vercel Functions. **No WDK dependency.** | ~250 |
-| `@thodare/world-aws` | **AWS-native** | RDS Postgres + SQS + Lambda + S3. EventBridge for cron. Step Functions optional for orchestrator path. | ~400 |
+| `@thodare/backend-self-host-postgres` | **Self-host** (Node + Postgres) — default for v0.2 | Postgres + worker container; deployable to Fly / Railway / Render / VPS / on-prem | ~150 |
+| `@thodare/backend-self-host-sqlite` | **Single-binary local** for `thodare dev` and demos | SQLite + in-process worker | ~50 |
+| `@thodare/backend-cloudflare` | **Cloudflare-native** | CF Workflows + Queues + DO + D1 + R2. Uses `cloudflare/dynamic-workflows@^0.1.1` *internally* for tenant routing (implementation detail, not exposed). | **~150** |
+| `@thodare/backend-vercel` | **Vercel-native** | Vercel Postgres (Neon) + Vercel Blob + Vercel Cron + Vercel Functions. **No WDK dependency.** | ~250 |
+| `@thodare/backend-aws` | **AWS-native** | RDS Postgres + SQS + Lambda + S3. EventBridge for cron. Step Functions optional for orchestrator path. | ~400 |
 
 **v0.2 ships five platform-native backends.** Each composes its host platform's own primitives directly. Plus the credential model lands in the same release. That is the value proposition.
 
-> **What changed from earlier drafts.** Earlier drafts framed `world-wdk` as an "inheritance play — one adapter, seven inherited backends" by wrapping Vercel's WDK. That framing is wrong — it couples Thodare to WDK's evolution, ships unwanted Vercel-flavored deploy semantics on every WDK-derived backend, and leaks WDK's directive + SWC pipeline into deployments that have no use for either. **Each platform should be reached by its own primitives.** WDK still exists as an *opt-in* adapter (§4.6) for users who specifically want directive-style authoring, but it is not how Thodare reaches Vercel.
+> **What changed from earlier drafts.** Earlier drafts framed `backend-wdk` as an "inheritance play — one adapter, seven inherited backends" by wrapping Vercel's WDK. That framing is wrong — it couples Thodare to WDK's evolution, ships unwanted Vercel-flavored deploy semantics on every WDK-derived backend, and leaks WDK's directive + SWC pipeline into deployments that have no use for either. **Each platform should be reached by its own primitives.** WDK still exists as an *opt-in* adapter (§4.6) for users who specifically want directive-style authoring, but it is not how Thodare reaches Vercel.
 
 ### 4.2 Ships in v0.3+ (validated by user demand)
 
 | Package | When | Why deferred |
 |---|---|---|
-| `@thodare/world-netlify` | A Netlify user asks | Netlify DB + Blob + Background Functions; ~300 LoC. Same shape as `world-vercel`. |
-| `@thodare/world-fly-machines` | A user wants always-on per-tenant compute | Fly Machines + per-tenant LiteFS; container-shaped, not serverless. |
-| `@thodare/world-rivetkit-engine` | When a user champions it | **Tractable for v0.2 if there's a champion** (~400-600 LoC per Rivet review). No FoundationDB required (Rivet OSS = Postgres + NATS), no Rivet binary. Implements the 11-method `EngineDriver` over Thodare's Postgres. |
-| `@thodare/world-inngest` | A user already on Inngest asks | Drops here from v0.2 — the platform-native principle says Inngest is not a *platform*, it's a *service*; users adopting Inngest get more value building on the underlying CF/Vercel/AWS native World. |
-| `@thodare/world-temporal` | A Temporal shop asks | Temporal's worker model is the "we don't want this" reference; only build if a real customer pays. |
-| `@thodare/world-native` | Probably never | The "Alternative A" trap. Build only if a clear gap emerges that nothing else fills. |
+| `@thodare/backend-netlify` | A Netlify user asks | Netlify DB + Blob + Background Functions; ~300 LoC. Same shape as `backend-vercel`. |
+| `@thodare/backend-fly-machines` | A user wants always-on per-tenant compute | Fly Machines + per-tenant LiteFS; container-shaped, not serverless. |
+| `@thodare/backend-rivetkit-engine` | When a user champions it | **Tractable for v0.2 if there's a champion** (~400-600 LoC per Rivet review). No FoundationDB required (Rivet OSS = Postgres + NATS), no Rivet binary. Implements the 11-method `EngineDriver` over Thodare's Postgres. |
+| `@thodare/backend-inngest` | A user already on Inngest asks | Drops here from v0.2 — the platform-native principle says Inngest is not a *platform*, it's a *service*; users adopting Inngest get more value building on the underlying CF/Vercel/AWS native Backend. |
+| `@thodare/backend-temporal` | A Temporal shop asks | Temporal's worker model is the "we don't want this" reference; only build if a real customer pays. |
+| `@thodare/backend-native` | Probably never | The "Alternative A" trap. Build only if a clear gap emerges that nothing else fills. |
 | `@thodare/supervisor` | When self-host docker users want process isolation | Tiny Rust binary that forks one Node/Bun process per workflow worker — independent restart, isolated memory. Lifted from Encore's `supervisor-encore` pattern (`code-reviews/encore-ts.md` §4: `supervisor/src/supervisor.rs:32-110`). Packaging concern; not architecture. |
 
-### 4.3 `@thodare/world-cloudflare-dynamic` — substantially refined from v1
+### 4.3 `@thodare/backend-cloudflare-dynamic` — substantially refined from v1
 
 Per `code-reviews/dynamic-workflows.md` the adapter is **~150 LOC, not ~600**:
 
@@ -497,7 +497,7 @@ Dispatcher Worker (one Worker per Thodare deployment)
 
 **Pricing reality:** at 10M runs/day × 5 steps each, the v1 estimate was ~$6.1k/mo (Option A). The dynamic-workflows pattern keeps us on Option A. Net cost vs. self-hosted Postgres + workers ($300/mo) = ~20× delta; documented honestly in the adapter README.
 
-### 4.4 `@thodare/world-vercel` — Vercel-native, not WDK-wrapped
+### 4.4 `@thodare/backend-vercel` — Vercel-native, not WDK-wrapped
 
 Composes Vercel's own primitives directly. No WDK dependency.
 
@@ -515,7 +515,7 @@ Composes Vercel's own primitives directly. No WDK dependency.
 
 **Build target:** `thodare build --target=vercel` produces a directory with a Vercel Build Output API v3 layout + a `vercel.json` (merged into the user's `vercel.json` if present). The user runs `vercel --prod` themselves (per the no-`thodare deploy` rule + the deploy-redirect trick — Flue's `cloudflare-wrangler-merge.ts:563-580` pattern generalized).
 
-### 4.5 `@thodare/world-aws` — AWS-native
+### 4.5 `@thodare/backend-aws` — AWS-native
 
 Composes AWS primitives directly.
 
@@ -534,19 +534,19 @@ Composes AWS primitives directly.
 
 **Capability flags:** `serverless: true`, `maxStepDurationMs: 900_000` (Lambda 15-min), `pricingModel: "per-invocation"`, `supportsLiveSubscription: true` (via API GW WebSockets — adds operational cost), `supportsResumeFromStep: true`.
 
-### 4.6 `@thodare/world-wdk` — *opt-in only*, not the inheritance play
+### 4.6 `@thodare/backend-wdk` — *opt-in only*, not the inheritance play
 
-Demoted from v2's "inheritance play." `world-wdk` exists if a developer specifically wants WDK's `'use workflow'` / `'use step'` directive authoring as the substrate (because they like the DX, not because they need Vercel — `world-vercel` already covers Vercel directly). The adapter:
+Demoted from v2's "inheritance play." `backend-wdk` exists if a developer specifically wants WDK's `'use workflow'` / `'use step'` directive authoring as the substrate (because they like the DX, not because they need Vercel — `backend-vercel` already covers Vercel directly). The adapter:
 
 1. Compiles Thodare's `SerializedWorkflow` JSON into a TS file with `'use workflow'` + `'use step'` directives at deploy time.
 2. Bundles that TS via `@workflow/builders`.
 3. Runtime: Thodare's runtime walker is registered as a single `'use workflow'` function in WDK; per-Thodare-workflow JSON is loaded from Thodare's own store at run time. Same convergence pattern as §1 (one orchestrator, per-instance metadata).
 
-**Why opt-in only:** wrapping WDK to reach Vercel pulls Vercel users through an abstraction tax (WDK's runtime + SWC) that they did not ask for. `world-vercel` reaches Vercel directly with Vercel's own primitives — same dollars, simpler bill, platform-native debugging. WDK is a peer architecture to learn from (per `code-reviews/wdk.md` — patterns lifted verbatim into the Thodare contract); it is not the way Thodare reaches a platform.
+**Why opt-in only:** wrapping WDK to reach Vercel pulls Vercel users through an abstraction tax (WDK's runtime + SWC) that they did not ask for. `backend-vercel` reaches Vercel directly with Vercel's own primitives — same dollars, simpler bill, platform-native debugging. WDK is a peer architecture to learn from (per `code-reviews/wdk.md` — patterns lifted verbatim into the Thodare contract); it is not the way Thodare reaches a platform.
 
 ### 4.7 The headless-friendliness adapter matrix — for visual-builder consumers
 
-| Capability | `world-self-host-postgres` | `world-self-host-sqlite` | `world-cloudflare` | `world-vercel` | `world-aws` |
+| Capability | `backend-self-host-postgres` | `backend-self-host-sqlite` | `backend-cloudflare` | `backend-vercel` | `backend-aws` |
 |---|---|---|---|---|---|
 | Live subscription | ✅ LISTEN/NOTIFY | ✅ in-process EventEmitter | ✅ DO + WS | ✅ Functions streaming | ✅ API Gateway WS |
 | Step IO inspection | ✅ | ✅ | ⚠️ 1 MiB cap per step | ✅ | ✅ |
@@ -556,7 +556,7 @@ Demoted from v2's "inheritance play." `world-wdk` exists if a developer specific
 | Credentials at rest | per-org KMS or env-derived AES-256 | env-derived AES-256 | DO + AES-256 | KMS-derived per-org AES-256 | KMS-derived per-org AES-256 |
 | Pricing at 10M runs/day | ~$300/mo | n/a (dev only) | ~$6.1k/mo | ~$2-3k/mo (Postgres + Functions) | ~$1.5k/mo (RDS + Lambda) |
 
-Adopters of Thodare-as-headless-backend pick the platform-native World whose UI behavior + cost + ops familiarity matches their team. `world-wdk` (§4.6, opt-in) is omitted from this matrix because its capabilities are inherited from whatever WDK World it's pointed at; if a user picks WDK on Vercel, they should compare against `world-vercel` directly first.
+Adopters of Thodare-as-headless-backend pick the platform-native Backend whose UI behavior + cost + ops familiarity matches their team. `backend-wdk` (§4.6, opt-in) is omitted from this matrix because its capabilities are inherited from whatever WDK World it's pointed at; if a user picks WDK on Vercel, they should compare against `backend-vercel` directly first.
 
 ---
 
@@ -566,9 +566,9 @@ Six phases. Each independently shippable. **No behavior change for existing user
 
 ### Phase 1 — Define the contract + ship the conformance suite (~1.5 weeks)
 
-- `packages/world/` (new) — pure types + `ThodareWorld` interface + `WorldCapabilities` + `ThodareStep` + `ThodareCtx` + branded `SpecVersion` constants. No runtime, no deps.
-- `packages/world-contract-tests/` (new) — parameterized vitest suite. Provides `runContractTests(world, options?)`. **Ship FIRST**, before any second adapter, so the contract is anchored in executable form.
-- RFC at `rfcs/world-abstraction/README.md` — restate this proposal in RFC form. Lock the interface and capability list in v0; bump in v1+ with explicit semver discipline.
+- `packages/backend/` (new) — pure types + `ThodareBackend` interface + `BackendCapabilities` + `ThodareStep` + `ThodareCtx` + branded `SpecVersion` constants. No runtime, no deps.
+- `packages/backend-contract-tests/` (new) — parameterized vitest suite. Provides `runContractTests(backend, options?)`. **Ship FIRST**, before any second adapter, so the contract is anchored in executable form.
+- RFC at `rfcs/backend-abstraction/README.md` — restate this proposal in RFC form. Lock the interface and capability list in v0; bump in v1+ with explicit semver discipline.
 - **SPEC.md fix:** correct `add` / `update` / `remove` → `add` / `edit` / `delete` in §3 T1. One-line PR.
 
 ### Phase 2 — Ship the credentials primitive (~1.5 weeks)
@@ -584,34 +584,34 @@ Six phases. Each independently shippable. **No behavior change for existing user
 
 ### Phase 3 — Extract the openworkflow adapter (~1 week)
 
-- `packages/world-openworkflow-pg/` (new) — wraps `OpenWorkflow` + `BackendPostgres`. Passes contract tests. ~150 LoC.
-- `packages/world-openworkflow-sqlite/` (new) — same code, `BackendSqlite`. ~50 LoC.
-- Refactor `packages/engine/src/runner/openworkflow.ts` + `runtime-workflow.ts` + `handle.ts` — take a `World` instead of an `OpenWorkflow` + `Backend`. The walker (`walk.ts`) is already abstract (`step: any`); minimal change.
-- `packages/api/src/runtime-host.ts` — rewrite in terms of `world.runWorkflow`. ~30 LoC change.
-- **Backward-compat:** `createWfkit({ backend })` continues to work; deprecated in favor of `createWfkit({ world })`.
+- `packages/backend-openworkflow-pg/` (new) — wraps `OpenWorkflow` + `BackendPostgres`. Passes contract tests. ~150 LoC.
+- `packages/backend-openworkflow-sqlite/` (new) — same code, `BackendSqlite`. ~50 LoC.
+- Refactor `packages/engine/src/runner/openworkflow.ts` + `runtime-workflow.ts` + `handle.ts` — take a `Backend` instead of an `OpenWorkflow` + `Backend`. The walker (`walk.ts`) is already abstract (`step: any`); minimal change.
+- `packages/api/src/runtime-host.ts` — rewrite in terms of `backend.runWorkflow`. ~30 LoC change.
+- **Backward-compat:** `createWfkit({ backend })` continues to work; deprecated in favor of `createWfkit({ backend })`.
 - All existing 209 tests pass with no behavior change.
 
 ### Phase 4 — Ship the second adapter (~1.5 weeks)
 
-- `packages/world-cloudflare-dynamic/` (new) — uses `cloudflare/dynamic-workflows@^0.1.1` peer dep + D1 + DO. ~150 LOC.
+- `packages/backend-cloudflare-dynamic/` (new) — uses `cloudflare/dynamic-workflows@^0.1.1` peer dep + D1 + DO. ~150 LOC.
 - `examples/deploy-cloudflare/` workspace — full deploy story end to end via `wrangler deploy`.
 - New docs: `apps/docs/src/content/docs/how-to/deploy-cloudflare.md`.
 
 This is **the proof point** — once a second adapter passes contract tests, the abstraction is real. Plus we get noisy-neighbor mitigation pattern documented.
 
-### Phase 5 — Ship the platform-native worlds (~4 weeks)
+### Phase 5 — Ship the platform-native backends (~4 weeks)
 
-- `packages/world-vercel/` (~250 LOC; Vercel Postgres + Blob + Cron + Functions)
-- `packages/world-aws/` (~400 LOC; RDS + SQS + Lambda + S3 + EventBridge)
+- `packages/backend-vercel/` (~250 LOC; Vercel Postgres + Blob + Cron + Functions)
+- `packages/backend-aws/` (~400 LOC; RDS + SQS + Lambda + S3 + EventBridge)
 - `examples/deploy-vercel/`, `examples/deploy-aws/`, plus the existing `examples/deploy-cloudflare/`
 - Per-adapter docs page in the deploy quadrant.
 - **Headless-builder demo:** `examples/headless-ui-demo/` — a minimal canvas (React Flow + 200 LoC of glue) that reads from `@thodare/api` and proves the substrate story. Same demo runs against every adapter; only the deploy target changes.
-- *(deferred to v0.3+)* `packages/world-wdk/` (opt-in only; ~150 LoC), `packages/world-netlify/`, `packages/world-rivetkit-engine/`, `packages/world-inngest/`
+- *(deferred to v0.3+)* `packages/backend-wdk/` (opt-in only; ~150 LoC), `packages/backend-netlify/`, `packages/backend-rivetkit-engine/`, `packages/backend-inngest/`
 
 ### Phase 6 — Deprecate the direct openworkflow API (~v0.3, separate release)
 
 - `createWfkit({ backend })` removed.
-- `createWfkit({ world })` is the only path.
+- `createWfkit({ backend })` is the only path.
 - Migration codemod + changelog.
 - This is the only release that breaks existing users; gate with a major version bump per Changesets discipline (T15).
 
@@ -625,9 +625,9 @@ Per `code-reviews/flue.md` the proposed `thodare` CLI for v0.2:
 
 ```
 thodare init                              # scaffold a new project (one of the few one-shot verbs)
-thodare dev                               # local SQLite world; hot-reload on workflow JSON change
+thodare dev                               # local SQLite backend; hot-reload on workflow JSON change
 thodare run <workflow> [--input '{...}']  # one-shot CI-style run; reads result from stdout
-thodare build --target=<world>            # produce the deployable artifact for the target
+thodare build --target=<backend>            # produce the deployable artifact for the target
 ```
 
 **Critically: no `thodare deploy`.** `thodare build --target=cloudflare` produces a directory with a `wrangler.jsonc` + a worker bundle + a deploy-redirect file (`<outputDir>/.wrangler/deploy/config.json` per Flue's pattern at `cloudflare-wrangler-merge.ts:563-580`); the user runs `wrangler deploy` themselves and **it Just Works** with no Thodare wrapper command. Same pattern for `--target=lambda` (SAM template + redirect), `--target=postgres-self-host` (Compose file + migration script).
@@ -646,23 +646,23 @@ interface BuildPlugin {
   additionalOutputs?(ctx: BuildContext): Record<string, string> | Promise<Record<string, string>>;
 
   // Added from Encore.ts (per code-reviews/encore-ts.md §8)
-  generateInfraConfigSchema?(ctx: BuildContext): JSONSchema;             // declares "what bindings does this World need"
-  validateInfraConfig?(ctx: BuildContext, cfg: unknown): ValidationResult; // fail fast: "your Queue('foo') has no binding in thodare.world.json"
+  generateInfraConfigSchema?(ctx: BuildContext): JSONSchema;             // declares "what bindings does this Backend need"
+  validateInfraConfig?(ctx: BuildContext, cfg: unknown): ValidationResult; // fail fast: "your Queue('foo') has no binding in thodare.backend.json"
 }
 ```
 
-Each `world-*` package exports a `BuildPlugin`. The CLI `--target` flag dispatches. Third parties can write their own `world-foo` + `BuildPlugin` without touching the CLI.
+Each `backend-*` package exports a `BuildPlugin`. The CLI `--target` flag dispatches. Third parties can write their own `backend-foo` + `BuildPlugin` without touching the CLI.
 
-**The `generateInfraConfigSchema` + `validateInfraConfig` pair** is the seam Thodare borrows from Encore's `runtimes/core/src/infracfg.rs`. Application code declares **what** it needs (`defineConnector("send_push", { credential: { required: true, type: "fcm" } })`); the per-target `thodare.world.json` declares **where** those things live (`{ "credential.fcm": { provider: "cf-do", namespace: "credentials-prod" } }`); the build accepts both and fails fast if the schema and the config disagree. **Without this seam, the multi-cloud story is hand-wavy ("each World decides"); with it, the seam is explicit, validatable, and surface-stable across adapter versions.**
+**The `generateInfraConfigSchema` + `validateInfraConfig` pair** is the seam Thodare borrows from Encore's `runtimes/core/src/infracfg.rs`. Application code declares **what** it needs (`defineConnector("send_push", { credential: { required: true, type: "fcm" } })`); the per-target `thodare.backend.json` declares **where** those things live (`{ "credential.fcm": { provider: "cf-do", namespace: "credentials-prod" } }`); the build accepts both and fails fast if the schema and the config disagree. **Without this seam, the multi-cloud story is hand-wavy ("each Backend decides"); with it, the seam is explicit, validatable, and surface-stable across adapter versions.**
 
-### 6.1 The build-time config seam — `thodare.world.json`
+### 6.1 The build-time config seam — `thodare.backend.json`
 
 Per Encore's `infra.config.json` pattern. One file per environment per target:
 
 ```jsonc
-// thodare.world.cf.json
+// thodare.backend.cf.json
 {
-  "world": "@thodare/world-cloudflare",
+  "backend": "@thodare/backend-cloudflare",
   "bindings": {
     "credential.fcm":         { "provider": "cf-do",   "namespace": "credentials-prod" },
     "queue.workflow":         { "provider": "cf-queue", "name": "thodare-workflow" },
@@ -677,11 +677,11 @@ Per Encore's `infra.config.json` pattern. One file per environment per target:
 }
 ```
 
-`thodare build --target=cloudflare --config=thodare.world.cf.json` reads both, validates the schema, and refuses to build if a binding is missing or the wrong provider is named. The per-World package owns the schema; the CLI does the validation. **Application code never knows which provider is wired** — that's the whole point of the seam.
+`thodare build --target=cloudflare --config=thodare.backend.cf.json` reads both, validates the schema, and refuses to build if a binding is missing or the wrong provider is named. The per-Backend package owns the schema; the CLI does the validation. **Application code never knows which provider is wired** — that's the whole point of the seam.
 
 ### 6.2 The codegen tree in the user's repo — `.thodare/`
 
-Per Encore's `encore.gen/` pattern (`code-reviews/encore-ts.md` §8). `thodare build --target=X` writes its generated entrypoint + per-World adapter glue to `.thodare/` in the user's repo (gitignored by default). Three properties matter:
+Per Encore's `encore.gen/` pattern (`code-reviews/encore-ts.md` §8). `thodare build --target=X` writes its generated entrypoint + per-Backend adapter glue to `.thodare/` in the user's repo (gitignored by default). Three properties matter:
 
 1. **Production-grade, hand-readable, eject-able TS.** A user can read `.thodare/entry.ts` to understand what's actually running. They can fork it and own it. This is "AI-buildable, human-ownable" — the opposite of magic-hidden-in-`node_modules`.
 2. **Inspectable in PRs.** If the user opts to commit `.thodare/`, every build's diff is a real PR-reviewable artifact.
@@ -722,12 +722,12 @@ A developer building an n8n-class / ActivePieces-class / Sim-Studio-class applic
 | Patch workflow (LLM-style or canvas-style) | `POST /api/workflows/:id/operations` | ✅ — extend with `?stream=ndjson` (NEW) |
 | Diff two workflows → ops | `POST /api/workflows/:id/diff` (NEW) | **Missing** P1 — Sim has `compute-edit-sequence.ts` as reference |
 | Trigger run | `POST /api/workflows/:id/run` | ✅ |
-| Subscribe to run events | `GET /api/runs/:runId/stream` (SSE) | **Missing** P0 — gated by `World.capabilities.supportsLiveSubscription` |
+| Subscribe to run events | `GET /api/runs/:runId/stream` (SSE) | **Missing** P0 — gated by `Backend.capabilities.supportsLiveSubscription` |
 | List runs + steps + IO | `GET /api/runs` + `GET /api/runs/:id/steps` | ✅ |
 | Resume run from step | `POST /api/runs/:id/resume?step=<stepId>` (NEW) | **Missing** P1 — gated by `supportsResumeFromStep` |
 | Recover failed run | `POST /api/runs/:id/recover` (NEW) | **Missing** P1 — gated by `supportsRecover` |
 | Per-workflow webhook URL | `GET /api/workflows/:id/blocks/:blockId/webhook-url` (NEW) | **Missing** P3 |
-| Full system catalog in one call (workflows + connectors + credential types + capability flags + active World) | `GET /api/system/manifest` (NEW) | **Missing** P1 — saves N round-trips for LLMs and visual builders bootstrapping (per `code-reviews/iii-dev.md` §3 — iii's `engine::functions::list` is its biggest LLM-feedability story) |
+| Full system catalog in one call (workflows + connectors + credential types + capability flags + active Backend) | `GET /api/system/manifest` (NEW) | **Missing** P1 — saves N round-trips for LLMs and visual builders bootstrapping (per `code-reviews/iii-dev.md` §3 — iii's `engine::functions::list` is its biggest LLM-feedability story) |
 
 Ten of sixteen are present today. Six are gaps that v2 adds.
 
@@ -749,7 +749,7 @@ A minimal canvas (React Flow + ~500 LoC of glue) that reads from `@thodare/api` 
 
 To be precise about scope:
 
-- ❌ Thodare does **not** ship `world-n8n` / `world-activepieces` / `world-sim-studio` adapters. Those are competing applications, not durable execution backends.
+- ❌ Thodare does **not** ship `backend-n8n` / `backend-activepieces` / `backend-sim-studio` adapters. Those are competing applications, not durable execution backends.
 - ❌ Thodare does **not** import n8n nodes / AP pieces / Sim blocks as Thodare connectors. Cross-project connector portability is a separate question the headless-substrate developer can solve in their own application.
 - ❌ Thodare is **not** competing with n8n / AP / Sim at the UI/product layer. It's the substrate they (or applications like them) build on.
 
@@ -761,17 +761,17 @@ The 15-item gap list in §2.4 + `code-reviews/visual-builder-substrates.md:§4.5
 
 ### 8.1 Adapter capability variance — the real risk
 
-Engines disagree on sleep precision, signal semantics, retry policy, step output size. **Mitigation:** capability flags carry the truth; the validator at `applyOperations` time refuses workflows whose declared step output exceeds the active World's `maxStepOutputBytes`; the contract-test suite asserts per-adapter behavior.
+Engines disagree on sleep precision, signal semantics, retry policy, step output size. **Mitigation:** capability flags carry the truth; the validator at `applyOperations` time refuses workflows whose declared step output exceeds the active Backend's `maxStepOutputBytes`; the contract-test suite asserts per-adapter behavior.
 
-**Honest framing in docs:** "Thodare unifies the surface, not the substrate. Pick the World whose tradeoffs match your workload."
+**Honest framing in docs:** "Thodare unifies the surface, not the substrate. Pick the Backend whose tradeoffs match your workload."
 
 ### 8.2 The "make Thodare a WDK World instead" alternative
 
 Per WDK reviewer §8.4: technically tractable but inverts the right direction. WDK's surface is **code-first**; Thodare's bet is **JSON+EditOp**. Becoming a WDK World means adopting WDK's surface and burying ours. **Reject** — but document in RFC's "alternatives considered" section.
 
-### 8.2a The "wrap WDK to inherit Vercel + Postgres + Local + community Worlds" alternative
+### 8.2a The "wrap WDK to inherit Vercel + Postgres + Local + community Backends" alternative
 
-This is the framing v2 *initially* used. Refined out in this revision (see §4.1): wrapping WDK as a meta-adapter for many platforms couples Thodare to WDK's evolution, ships Vercel-flavored deploy semantics on every WDK-derived backend, and leaks WDK's directive + SWC pipeline into deployments that have no use for either. **Each platform reaches its own primitives directly.** WDK survives only as an opt-in adapter (`world-wdk`, §4.6) for users who specifically want directive-style authoring.
+This is the framing v2 *initially* used. Refined out in this revision (see §4.1): wrapping WDK as a meta-adapter for many platforms couples Thodare to WDK's evolution, ships Vercel-flavored deploy semantics on every WDK-derived backend, and leaks WDK's directive + SWC pipeline into deployments that have no use for either. **Each platform reaches its own primitives directly.** WDK survives only as an opt-in adapter (`backend-wdk`, §4.6) for users who specifically want directive-style authoring.
 
 ### 8.2b The "build on Cloudflare's Agent Framework" alternative
 
@@ -781,13 +781,13 @@ Thodare's problem shape is different: durable orchestration of arbitrary workflo
 
 ### 8.3 The "build the native runtime (Alternative A)" alternative
 
-Per WDK reviewer §8.2: "Don't ship a `vm.Context` workflow runtime if you don't have to." Right call for WDK's directive model; wrong call for Thodare's JSON model. Door stays open as `@thodare/world-native` if a clear gap emerges; almost certainly never.
+Per WDK reviewer §8.2: "Don't ship a `vm.Context` workflow runtime if you don't have to." Right call for WDK's directive model; wrong call for Thodare's JSON model. Door stays open as `@thodare/backend-native` if a clear gap emerges; almost certainly never.
 
 ### 8.4 The "just use one of these existing engines, scrap Thodare entirely" alternative
 
 The framing: if WDK / Inngest / CF / Rivet exist, why does Thodare exist?
 
-The answer: because none of them ship the JSON+EditOp + multi-tenant API + credential vault + Diataxis-disciplined docs + `hidden()` security boundary surface. **Thodare is the LLM-native + visual-builder-friendly control plane on top of any of them.** The World abstraction makes that pitch credible.
+The answer: because none of them ship the JSON+EditOp + multi-tenant API + credential vault + Diataxis-disciplined docs + `hidden()` security boundary surface. **Thodare is the LLM-native + visual-builder-friendly control plane on top of any of them.** The Backend abstraction makes that pitch credible.
 
 ### 8.5 Adapter pricing transparency
 
@@ -799,7 +799,7 @@ Once Thodare ships the `Credential` artifact in v0.2, changing it later breaks e
 
 ### 8.7 The "wait, is Cloudflare's `dynamic-workflows` stable enough to depend on?" risk
 
-It shipped 2026-05-01 at version 0.1.1. Per `code-reviews/dynamic-workflows.md`: API churn risk is real; tests don't exercise the RPC-stub path end-to-end; `WorkerEntrypoint` cannot be `new`'d outside workerd RPC contexts so unit tests cover only the function-level surface. **Mitigation:** pin `^0.1.1` as peer dep with explicit upgrade gates; do NOT vendor the source even though it's MIT and small (the upstream maintainers will move faster than us; let them); document that `world-cloudflare-dynamic` is "alpha-on-alpha" and not the recommended production World until upstream stabilizes.
+It shipped 2026-05-01 at version 0.1.1. Per `code-reviews/dynamic-workflows.md`: API churn risk is real; tests don't exercise the RPC-stub path end-to-end; `WorkerEntrypoint` cannot be `new`'d outside workerd RPC contexts so unit tests cover only the function-level surface. **Mitigation:** pin `^0.1.1` as peer dep with explicit upgrade gates; do NOT vendor the source even though it's MIT and small (the upstream maintainers will move faster than us; let them); document that `backend-cloudflare-dynamic` is "alpha-on-alpha" and not the recommended production Backend until upstream stabilizes.
 
 ---
 
@@ -809,7 +809,7 @@ For v0.2 to ship as "done":
 
 ### Functional
 
-- [ ] Five adapters in the workspace, all green on `@thodare/world-contract-tests`.
+- [ ] Five adapters in the workspace, all green on `@thodare/backend-contract-tests`.
 - [ ] **Credential primitive shipped** with end-to-end test covering encrypt-at-rest + never-leaks-to-LLM + multi-tenant isolation.
 - [ ] All existing 209 tests pass with no regressions; new total ≥ 280 (contract suite + credential + tombstone + resume/recover tests).
 - [ ] Backward compat: `createWfkit({ backend })` works in v0.2 with deprecation warning.
@@ -819,16 +819,16 @@ For v0.2 to ship as "done":
 
 ### Operational (the real bar)
 
-- [ ] **10,000 concurrent workflow runs** sustained for 1 hour against `world-openworkflow-pg`, p99 step latency ≤ 200ms, zero data loss on a single worker pod restart mid-run.
-- [ ] **1,000 concurrent runs** sustained for 1 hour against `world-cloudflare-dynamic`, p99 step latency ≤ 1s, zero replay-divergence errors, zero envelope-leak findings.
+- [ ] **10,000 concurrent workflow runs** sustained for 1 hour against `backend-openworkflow-pg`, p99 step latency ≤ 200ms, zero data loss on a single worker pod restart mid-run.
+- [ ] **1,000 concurrent runs** sustained for 1 hour against `backend-cloudflare-dynamic`, p99 step latency ≤ 1s, zero replay-divergence errors, zero envelope-leak findings.
 - [ ] **Adapter swap test:** `examples/full-llm-loop/` workflow runs identically on every adapter — only deploy target changes.
 - [ ] **Black Friday simulation:** single 10M-run scripted scenario across all 5 adapters; results posted as `bench/black-friday-2026.md` with raw numbers, latency histograms, cost math.
 - [ ] **Tombstone replay test passes** — a workflow with a removed mid-graph block, in-flight run keeps T4 JSON, new run uses tombstone, both succeed.
-- [ ] **Resume-from-step test passes** on every World that declares `supportsResumeFromStep: true`.
+- [ ] **Resume-from-step test passes** on every Backend that declares `supportsResumeFromStep: true`.
 
 ### Strategic
 
-- [ ] At least one external adopter writes a third-party World adapter using the public `@thodare/world` types within 90 days. (If nobody can, the abstraction is wrong.)
+- [ ] At least one external adopter writes a third-party Backend adapter using the public `@thodare/backend` types within 90 days. (If nobody can, the abstraction is wrong.)
 - [ ] At least one adopter migrates from openworkflow + Postgres to Cloudflare Workflows without changing their workflow JSON or their EditOp loop. (Demonstrates the substrate-swap promise.)
 - [ ] **At least one external project demonstrates a custom n8n-class / AP-class / Sim-class UI built on `@thodare/api` within 90 days.** (Demonstrates the headless-substrate promise.)
 - [ ] HN / X reach: post-launch front-page on HN ("Show HN: Thodare runs the same workflow on Postgres, Cloudflare, Vercel, and your laptop — and it's the headless backend for your n8n clone").
@@ -849,7 +849,7 @@ Before this becomes an RFC, four decisions are load-bearing:
 
 ### 10.1 Capability flags vs. trait composition
 
-This proposal recommends capability flags (Alternative B from `_scratch-interface-design.md`). If the maintainer prefers traits (Alternative C), the World interface and the contract-test suite need to be rebuilt around traits — meaningful redesign, not a tweak.
+This proposal recommends capability flags (Alternative B from `_scratch-interface-design.md`). If the maintainer prefers traits (Alternative C), the Backend interface and the contract-test suite need to be rebuilt around traits — meaningful redesign, not a tweak.
 
 ### 10.2 `thodare deploy` or not
 
@@ -869,10 +869,10 @@ Recommends `packages/engine/src/credentials/` (engine-level), with API endpoints
 
 Every claim in this proposal is sourced from one or more of:
 
-- [`code-reviews/wdk.md`](./code-reviews/wdk.md) — 7,641 words. World contract + 3 official Worlds + SWC plugin + runtime + framework integrations. The foundational read.
+- [`code-reviews/wdk.md`](./code-reviews/wdk.md) — 7,641 words. Backend contract + 3 official Backends + SWC plugin + runtime + framework integrations. The foundational read.
 - [`code-reviews/workflow-examples.md`](./code-reviews/workflow-examples.md) — 4,499 words. WDK primitives reference + 5 reusable patterns + framework adapter contract.
 - [`code-reviews/workflow-builder-template.md`](./code-reviews/workflow-builder-template.md) — 6,828 words. Plugin registry + interpreter/codegen split + AI op-stream route + Drizzle schema + auth.
-- [`code-reviews/dynamic-workflows.md`](./code-reviews/dynamic-workflows.md) — 4,965 words. Line-by-line walkthrough of the 300-LoC library + concrete `world-cloudflare-dynamic` adapter sketch + 3 risks.
+- [`code-reviews/dynamic-workflows.md`](./code-reviews/dynamic-workflows.md) — 4,965 words. Line-by-line walkthrough of the 300-LoC library + concrete `backend-cloudflare-dynamic` adapter sketch + 3 risks.
 - [`code-reviews/flue.md`](./code-reviews/flue.md) — 8,702 words. `BuildPlugin` interface + wrangler-merge algorithm + error vocabulary + dev server two-tier reloader + the deploy-redirect trick.
 - [`code-reviews/rivet.md`](./code-reviews/rivet.md) — 7,374 words. `EngineDriver` + `WorkflowContextInterface` + the `removed` entry kind + `replayWorkflowFromStep` + `recover()` semantics.
 - [`code-reviews/visual-builder-substrates.md`](./code-reviews/visual-builder-substrates.md) — 6,570 words. n8n / AP / Sim deep dive + EditOp inheritance verification (3 of 5 ops diverged) + 15-item prioritized gap list.
@@ -885,7 +885,7 @@ Plus the v1-era research:
 - [`rivet-deep-dive.md`](./rivet-deep-dive.md) — first-pass Rivet research (superseded by `code-reviews/rivet.md`).
 - [`_scratch-interface-design.md`](./_scratch-interface-design.md) — three interface alternatives + openworkflow coupling map.
 - [`_parking-lot-headless-substrate.md`](./_parking-lot-headless-substrate.md) — the user's mid-research clarification on the headless-substrate goal.
-- [`world-abstraction-proposal.v1.md`](./world-abstraction-proposal.v1.md) — v1 of this proposal, kept for diffability.
+- [`backend-abstraction-proposal.v1.md`](./backend-abstraction-proposal.v1.md) — v1 of this proposal, kept for diffability.
 
 External clones referenced (siblings of `thodare/` in `agent-control-panel/`):
 
@@ -903,6 +903,6 @@ External clones referenced (siblings of `thodare/` in `agent-control-panel/`):
 
 ---
 
-**End of proposal v2.** Open the RFC at `rfcs/world-abstraction/README.md` when ready. The v2 above is RFC-shaped — translate `## n` headings to RFC sections + lock the interface in v0.
+**End of proposal v2.** Open the RFC at `rfcs/backend-abstraction/README.md` when ready. The v2 above is RFC-shaped — translate `## n` headings to RFC sections + lock the interface in v0.
 
 The standard isn't "good enough" — it's "holy shit." Two consumers, one substrate; pick the engine that fits your bill. That's the pitch.

@@ -1,6 +1,6 @@
 # Parking lot — headless-substrate goal
 
-> Surfaced 2026-05-02 mid-review. **Must be folded into `world-abstraction-proposal.md` v2.** Saved here so it isn't lost while the 6 code-review agents run.
+> Surfaced 2026-05-02 mid-review. **Must be folded into `backend-abstraction-proposal.md` v2.** Saved here so it isn't lost while the 6 code-review agents run.
 
 ## The goal (verbatim from the user, with clarification)
 
@@ -14,7 +14,7 @@
 
 - ✅ A developer building an n8n-clone uses `@thodare/api` + `@thodare/engine` as their durable backend; they ship their own UI, their own connector library, their own brand. Thodare provides: persistence, runs, durability, retries, multi-tenancy, the JSON DSL, the EditOp patch loop.
 - ✅ A developer building a Sim-Studio-style agent builder pulls in `@thodare/engine`, defines their own `Block`s + `Tool`s for their domain, lets their LLM drive `POST /api/workflows/:id/operations`, ships their own canvas.
-- ❌ Thodare does **not** ship `world-n8n` or `world-activepieces` adapters that import those projects' connector libraries. Cross-project connector portability is a separate question the developer can choose to solve in their own application.
+- ❌ Thodare does **not** ship `backend-n8n` or `backend-activepieces` adapters that import those projects' connector libraries. Cross-project connector portability is a separate question the developer can choose to solve in their own application.
 - ❌ Thodare is **not** competing with n8n / ActivePieces / Sim Studio at the UI/product layer. It's the substrate they (or applications like them) build on.
 
 **The seventh subagent's research is still load-bearing — but only for the second of its two synthesis questions:**
@@ -33,15 +33,15 @@ v1 framed Thodare as "the LLM-native control plane that runs on the durable-exec
 
 > **And: the headless durable-workflow backend that visual builders (n8n-class, ActivePieces-class, Sim-Studio-class) can ship on top of without building their own engine.**
 
-Two consumers, one substrate. The World abstraction serves both — visual UIs don't care which backend is wired.
+Two consumers, one substrate. The Backend abstraction serves both — visual UIs don't care which backend is wired.
 
-### What the World abstraction must guarantee for a UI consumer to be viable
+### What the Backend abstraction must guarantee for a UI consumer to be viable
 
-The 8-method `ThodareWorld` interface in proposal v1 covers the orchestrator side. **Visual UIs need more from the API + observability surface** (which is *not* the World, it's `@thodare/api`, but the World must support it). Specifically:
+The 8-method `ThodareBackend` interface in proposal v1 covers the orchestrator side. **Visual UIs need more from the API + observability surface** (which is *not* the Backend, it's `@thodare/api`, but the Backend must support it). Specifically:
 
-1. **Live run subscription** — UIs need to render "step 3 of 5 running" in real time. Some Worlds support streaming natively (CF DO + WS, openworkflow LISTEN/NOTIFY, Inngest events); some don't (vanilla Lambda + SQS). Must be a capability flag (`supportsLiveSubscription: boolean`) and the API exposes SSE on `/api/runs/:runId/stream` only when the active World supports it.
-2. **Step-by-step replay viewing** — UIs need every step's input/output/error/timing for the "execution log" panel. The Storage primitive in `Storage.steps.list({ runId })` must return per-step rows with timestamps and IO; capability flag if the World can't (some serverless backends discard step IO after success).
-3. **Retry from a specific failed step** — UIs offer "rerun this step" buttons. Requires the World to support `runWorkflow(name, input, { resumeFromStep: stepId })` or equivalent. **Not in the v1 interface — must add.**
+1. **Live run subscription** — UIs need to render "step 3 of 5 running" in real time. Some Backends support streaming natively (CF DO + WS, openworkflow LISTEN/NOTIFY, Inngest events); some don't (vanilla Lambda + SQS). Must be a capability flag (`supportsLiveSubscription: boolean`) and the API exposes SSE on `/api/runs/:runId/stream` only when the active Backend supports it.
+2. **Step-by-step replay viewing** — UIs need every step's input/output/error/timing for the "execution log" panel. The Storage primitive in `Storage.steps.list({ runId })` must return per-step rows with timestamps and IO; capability flag if the Backend can't (some serverless backends discard step IO after success).
+3. **Retry from a specific failed step** — UIs offer "rerun this step" buttons. Requires the Backend to support `runWorkflow(name, input, { resumeFromStep: stepId })` or equivalent. **Not in the v1 interface — must add.**
 4. **Manual trigger + idempotency** — UIs offer "Run now" buttons that should be idempotent under double-click. Already covered by `runWorkflow(name, input, { idempotencyKey })` in v1.
 5. **Cancel mid-flight with deterministic effect** — already covered by `cancel(runId)`.
 6. **Connector / piece registry inspection** — UIs render a connector palette. Thodare's `BlockRegistry` + `ToolRegistry` + the `hidden()` visibility model is the substrate. The API already exposes `GET /api/connectors`; that's the headless-consumer contract. **Validate: does the connector schema include enough metadata for an n8n-style "configure node" panel?** (UI labels, descriptions, types, examples, defaults, dropdown options.)
@@ -69,10 +69,10 @@ The user notes EditOps was "heavily inspired by Sim Studio." SPEC §3 T1 already
 
 ### Adapters must surface "headless-friendliness" capability
 
-Add to the v2 proposal's `WorldCapabilities` bag:
+Add to the v2 proposal's `BackendCapabilities` bag:
 
 ```ts
-interface WorldCapabilities {
+interface BackendCapabilities {
   // ... existing flags ...
 
   // For headless-UI-builder consumers
@@ -97,14 +97,14 @@ The v2 contract-test suite must include UI-consumer-shaped tests:
 
 Each v0.2 adapter's README must include a "Headless-UI suitability" matrix:
 
-| | world-openworkflow-pg | world-cloudflare-dynamic | world-wdk | world-inngest |
+| | backend-openworkflow-pg | backend-cloudflare-dynamic | backend-wdk | backend-inngest |
 |---|---|---|---|---|
-| Live subscription | ✅ LISTEN/NOTIFY | ✅ DO + WS | depends on inner World | ✅ events |
+| Live subscription | ✅ LISTEN/NOTIFY | ✅ DO + WS | depends on inner Backend | ✅ events |
 | Step IO inspection | ✅ | ⚠️ 1 MiB cap per step | ✅ | ✅ |
 | Resume from step | ✅ | ⚠️ requires re-create | ✅ | ⚠️ via re-replay |
 | Live latency | ~50ms | ~200ms | varies | ~300ms |
 
-So adopters of Thodare-as-headless-backend can pick the World whose UI behavior matches their needs.
+So adopters of Thodare-as-headless-backend can pick the Backend whose UI behavior matches their needs.
 
 ## Action items folded into proposal v2
 

@@ -152,8 +152,8 @@ export const ifInSegment = defineConnector({
 - Credential vault + AES-256-GCM at rest (Thodare engine)
 - Multi-tenant scoping per customer (Thodare API enforces T11)
 - The patch loop (Thodare engine — used both by their canvas + their AI assistant)
-- Run state / retries / sleeps that survive deploys (openworkflow / world-cloudflare)
-- Live SSE for the run timeline (Thodare API + world capability)
+- Run state / retries / sleeps that survive deploys (openworkflow / backend-cloudflare)
+- Live SSE for the run timeline (Thodare API + backend capability)
 - Step IO storage for "drop-off analysis" (Thodare's `Storage.steps.list`)
 
 That's an entire engineering team's worth of work the founder skips.
@@ -196,7 +196,7 @@ Two paths depending on PushKit's stage:
 
 ### Stage 1 — alpha / first 100 customers
 
-`world-self-host-postgres` on Fly.io or Render.
+`backend-self-host-postgres` on Fly.io or Render.
 
 - Single Postgres (Neon Pro: ~$70/mo).
 - Two worker pods (Fly Machines: ~$60/mo).
@@ -205,7 +205,7 @@ Two paths depending on PushKit's stage:
 
 ### Stage 2 — scale (10M+ runs/day)
 
-Migrate to `world-cloudflare`.
+Migrate to `backend-cloudflare`.
 
 - CF Workflows + Queues + DO + D1 + R2 — scales to zero off-hours.
 - ~$6.1k/mo at 10M runs/day (per `research/cloudflare-as-world.md`).
@@ -219,7 +219,7 @@ The substrate-swap promise made concrete.
 
 | Concern | Thodare provides | PushKit builds |
 |---|---|---|
-| Durable execution + retries + sleeps | ✅ engine + world | — |
+| Durable execution + retries + sleeps | ✅ engine + backend | — |
 | Workflow JSON storage + versioning | ✅ engine + API | — |
 | EditOp patch loop with skip-don't-reject | ✅ engine + API | — |
 | Multi-tenant scoping (per-customer org) | ✅ T11 enforcement | — |
@@ -240,7 +240,7 @@ Roughly: **Thodare provides ~60% of the engineering, by LOC.** PushKit builds th
 
 ## 7. Open gaps in Thodare today
 
-Per `research/code-reviews/visual-builder-substrates.md` and `research/world-abstraction-proposal.md` §2.4:
+Per `research/code-reviews/visual-builder-substrates.md` and `research/backend-abstraction-proposal.md` §2.4:
 
 | Gap | Why this use case needs it | Severity |
 |---|---|---|
