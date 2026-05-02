@@ -6,6 +6,7 @@
  */
 
 import type { RuntimeWorkflow, Wfkit } from "@thodare/engine";
+import type { CredentialStore } from "./store/credentials.js";
 
 export interface RuntimeHost {
   runtime: RuntimeWorkflow;
@@ -13,17 +14,42 @@ export interface RuntimeHost {
   dispatch: (
     workflowJson: unknown,
     input: unknown,
-    opts?: { idempotencyKey?: string },
+    opts?: { idempotencyKey?: string; organizationId?: string },
   ) => Promise<{ runId: string }>;
 }
 
-export function createRuntimeHost(opts: { wfkit: Wfkit }): RuntimeHost {
-  const runtime = opts.wfkit.runtime();
+export function createRuntimeHost(opts: {
+  wfkit: Wfkit;
+  credentialStore?: CredentialStore;
+  masterKey?: Uint8Array;
+}): RuntimeHost {
+  const resolveCredential =
+    opts.credentialStore && opts.masterKey
+      ? async (credentialId: string, organizationId: string) => {
+          const result = await opts.credentialStore!.getDecrypted(
+            organizationId,
+            credentialId,
+            opts.masterKey!,
+          );
+          if (!result) return null;
+          // Fire-and-forget update last_used_at
+          opts.credentialStore!.updateLastUsedAt(organizationId, credentialId).catch(() => {});
+          return { id: result.id, type: result.type, secret: result.secret, displayName: result.displayName, ...(result.scopes ? { scopes: result.scopes } : {}) };
+        }
+      : undefined;
+
+  const runtime = opts.wfkit.runtime(
+    resolveCredential ? { resolveCredential } : undefined,
+  );
   return {
     runtime,
     async dispatch(workflowJson, input, runOpts) {
       const handle = await runtime.run(
-        { workflow: workflowJson as never, input },
+        {
+          workflow: workflowJson as never,
+          input,
+          ...(runOpts?.organizationId ? { organizationId: runOpts.organizationId } : {}),
+        },
         runOpts,
       );
       return { runId: handle.id };

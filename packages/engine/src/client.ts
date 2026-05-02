@@ -28,6 +28,7 @@ import { registerBuiltinBlocks } from "./blocks/builtin.js";
 import { registerBuiltinTools } from "./tools/builtin.js";
 import { registerWaitTools } from "./tools/waits.js";
 import { buildDurableWorkflow, type DurableWorkflow } from "./runner/openworkflow.js";
+import type { ResolvedCredential } from "./credentials/types.js";
 import { buildRuntimeWorkflow, type RuntimeWorkflow } from "./runner/runtime-workflow.js";
 import type { ConnectorDef } from "./define/connector.js";
 import type { DurableHandle } from "./runner/handle.js";
@@ -149,7 +150,7 @@ export interface Wfkit {
    * restart per workflow create because every run goes through the
    * runtime workflow.
    */
-  runtime: () => RuntimeWorkflow;
+  runtime: (options?: { resolveCredential?: (credentialId: string, organizationId: string) => Promise<ResolvedCredential | null> }) => RuntimeWorkflow;
 }
 
 /** Helper: extract the input type from a WorkflowSpec. */
@@ -270,11 +271,16 @@ export async function createWfkit(opts: CreateWfkitOptions): Promise<Wfkit> {
       }
       return compiled.runDurable(input, runOpts);
     },
-    runtime() {
+    runtime(options) {
       if (runtimeRef) return runtimeRef;
       ensureNotStarted("runtime");
       runtimeRef = buildRuntimeWorkflow({
-        ow, backend, blockRegistry: blocks, toolRegistry: tools, env,
+        ow,
+        backend,
+        blockRegistry: blocks,
+        toolRegistry: tools,
+        env,
+        ...(options?.resolveCredential ? { resolveCredential: options.resolveCredential } : {}),
       });
       return runtimeRef;
     },
