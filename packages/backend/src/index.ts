@@ -79,7 +79,6 @@ export type {
   StepCompletedEvent,
   StepFailedEvent,
   SignalDeliveredEvent,
-  QueuePayload as QueuePayloadShape,
   RunOptsShape,
   RunHandleShape,
 } from "./schemas.js";

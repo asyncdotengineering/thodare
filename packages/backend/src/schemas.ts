@@ -88,6 +88,10 @@ export const EventSchema = z.discriminatedUnion("type", [
 export type EventPayload = z.infer<typeof EventSchema>;
 
 // ── Queue payload ──
+//
+// Single canonical shape — the Zod schema is the source of truth and
+// `queue.ts` re-exports `QueuePayload` from here. Same name, same
+// semantics, no `QueuePayloadShape` alias.
 
 export const QueuePayloadSchema = z.object({
   runId: z.string().optional(),

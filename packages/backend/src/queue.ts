@@ -1,3 +1,8 @@
+// Single canonical QueuePayload shape: the Zod schema in `schemas.ts`
+// is the source of truth; this type alias is its inferred shape.
+import type { QueuePayload } from "./schemas.js";
+export type { QueuePayload } from "./schemas.js";
+
 declare const MessageIdBrand: unique symbol;
 export type MessageId = string & {
   readonly [MessageIdBrand]: typeof MessageIdBrand;
@@ -5,13 +10,6 @@ export type MessageId = string & {
 
 export type ValidQueueName = string;
 export type QueuePrefix = string;
-
-export interface QueuePayload {
-  runId?: string;
-  runInput?: unknown;
-  correlationId?: string;
-  metadata?: Record<string, unknown>;
-}
 
 export interface QueueOptions {
   delayMs?: number;
