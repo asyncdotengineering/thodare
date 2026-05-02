@@ -269,7 +269,7 @@ This use case is **edge-heavy** — the workflow runtime serves user-facing webp
 | Trigger → run dispatch | ✅ | URL matcher + ingestion edge worker |
 | Conditional routing via `sourceHandle` | ✅ | — |
 | `wait_for_event` with timeout | ✅ | — |
-| Credential vault (Stripe key per customer) | ✅ (v0.2) | — |
+| Credential vault (Stripe key per customer) | ✅ (v1.0) | — |
 | Run state persistence + replay | ✅ | — |
 | Multi-tenant (per-customer org) | ✅ T11 | — |
 | Page renderer (HTML templating + CDN) | — | their domain |
@@ -291,7 +291,7 @@ The unique twist for FunnelForge: their page renderer + their canvas are bigger 
 | Per-step input/output streaming | Page rendering wants to stream HTML; today Thodare's `Storage.steps.list` returns final outputs only. | **P2** (lift WDK's `getWritable<T>()` pattern) |
 | HTTP-as-trigger (URL → workflow) routing | Today `POST /api/workflows/:id/run` is the trigger. For URL-based funnel pages, FunnelForge needs an extension that matches arbitrary URL patterns to workflows. | **P1** — could ship as a separate `@thodare/router` package |
 | Conditional resume by correlation key | `wait_for_event` already supports correlation keys; the implementation needs to be airtight at funnel scale (millions of concurrent waiting runs, each correlated by `sessionId`). | **P2** — the openworkflow runtime already does this; `backend-cloudflare` adapter needs to verify behavior at scale |
-| Affiliate-style "schedule-this-later" side effect block | Affiliate commission payouts need to fire 30 days after purchase (refund window). A `wait_duration("30d")` block + `pay_affiliate` works but ties up a run slot for 30 days. Worth optimizing as a "schedule-detached" pattern in v0.3. | **P3** |
+| Affiliate-style "schedule-this-later" side effect block | Affiliate commission payouts need to fire 30 days after purchase (refund window). A `wait_duration("30d")` block + `pay_affiliate` works but ties up a run slot for 30 days. Worth optimizing as a "schedule-detached" pattern in v1.1. | **P3** |
 | Branching on payment outcome | Already supported via `sourceHandle`; just needs documentation pattern. | works today |
 | Cart-abandonment `wait_for_event` with timeout | Already supported via `PauseInfo.timeoutMs`. | works today |
 

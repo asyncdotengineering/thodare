@@ -27,7 +27,7 @@ Concurrent runs:
 - `backend-cloudflare`: each run = a CF Workflows instance. CF currently caps at 50,000 concurrent active instances per account on the paid tier. At 100M concurrent waiting subscribers, this isn't viable on a single account — need account sharding (see proposal v2 §4.3 noisy-neighbor mitigation).
 - `backend-aws`: SQS queue depth + Lambda concurrency. RDS row count is fine; the bottleneck is Lambda concurrency at burst (default 1000/region, raisable).
 
-**v0.3 follow-up needed:** `runWorkflowBatch(name, inputs[])` API for the "fan out to a segment of N users" case where N can be millions.
+**v1.1 follow-up needed:** `runWorkflowBatch(name, inputs[])` API for the "fan out to a segment of N users" case where N can be millions.
 
 ## 2. Long durable sleeps as the load-bearing wait primitive
 
@@ -71,7 +71,7 @@ Run resumes from the wait_for_event block with payload as output.
 
 **Implementation reality across adapters:**
 
-- All five v0.2 adapters support this via `step.waitForSignal`.
+- All five v1.0 adapters support this via `step.waitForSignal`.
 - The lookup-by-token cost matters at scale. `backend-self-host-postgres` needs an index on `workflow_hooks(token)`; `backend-cloudflare` uses DO addressing (constant lookup).
 - Timeouts must be honored even if no signal ever arrives — verified by the contract test suite (proposal v2 §3.7 test #4).
 
@@ -121,7 +121,7 @@ Klaviyo, OneSignal, ClickFunnels all ship A/B testing. Implementation is identic
 
 The `random_split` block is a connector that returns `{ variant: "a" | "b" }` based on a deterministic hash of `runId` (so the variant is stable on replay — important for replay determinism). Multiple `sourceHandle` values route downstream.
 
-**v0.3 nice-to-have:** an engine-level `random_split` primitive that auto-instruments variant performance metrics, so the marketer dashboard can show "variant A converted at 3.2%, variant B at 4.1%" without the founder building it. **For v0.2 leave it to userland connectors.**
+**v1.1 nice-to-have:** an engine-level `random_split` primitive that auto-instruments variant performance metrics, so the marketer dashboard can show "variant A converted at 3.2%, variant B at 4.1%" without the founder building it. **For v1.0 leave it to userland connectors.**
 
 ## 6. The "drop-off analytics" pattern (Storage.steps.list at scale)
 
@@ -148,7 +148,7 @@ Thodare's `POST /api/workflows/:id/run` is one HTTP request → one workflow run
 3. Triggers are **batched** and sent to Thodare via a `runWorkflowBatch(name, inputs[])` API or via a queue-shaped trigger ingest endpoint.
 4. Thodare creates N runs; each runs independently.
 
-**v0.3 follow-up:** `POST /api/workflows/:id/run-batch` accepting `{ inputs: Array<{ input, idempotencyKey? }> }` returning `{ runIds: string[], skipped: [...] }`. The patch endpoint already supports the `?stream=ndjson` mode (proposal v2 §6); the batch run endpoint should as well so the caller can read each runId as it lands.
+**v1.1 follow-up:** `POST /api/workflows/:id/run-batch` accepting `{ inputs: Array<{ input, idempotencyKey? }> }` returning `{ runIds: string[], skipped: [...] }`. The patch endpoint already supports the `?stream=ndjson` mode (proposal v2 §6); the batch run endpoint should as well so the caller can read each runId as it lands.
 
 ## 8. The connector-set per vertical
 
@@ -205,19 +205,19 @@ This is a documentation pattern, not a Thodare feature.
 
 ## What this means for the proposal
 
-The use cases collectively validate **most of the v2 proposal's prioritized gaps** + add a handful of v0.3-targeted asks:
+The use cases collectively validate **most of the v2 proposal's prioritized gaps** + add a handful of v1.1-targeted asks:
 
 **Proposal v2 features already prioritized that these use cases need:**
 
-- ✅ First-class `Credential` primitive (v0.2 Phase 2) — every use case
-- ✅ `wait_until_timestamp` accepting absolute Date (v0.2 — lifted from WDK) — every use case
-- ✅ Container blocks (v0.2 P1) — marketing-automation especially
-- ✅ Dynamic schema endpoint (v0.2 P1) — every use case
-- ✅ NDJSON op-streaming (v0.2 §6) — every visual-builder canvas
-- ✅ `resumeFromStep` + `recover` (v0.2 §3.1) — drop-off recovery
-- ✅ `removed` entry kind (v0.2 §3.6) — graph-evolution against in-flight runs
+- ✅ First-class `Credential` primitive (v1.0 Phase 2) — every use case
+- ✅ `wait_until_timestamp` accepting absolute Date (v1.0 — lifted from WDK) — every use case
+- ✅ Container blocks (v1.0 P1) — marketing-automation especially
+- ✅ Dynamic schema endpoint (v1.0 P1) — every use case
+- ✅ NDJSON op-streaming (v1.0 §6) — every visual-builder canvas
+- ✅ `resumeFromStep` + `recover` (v1.0 §3.1) — drop-off recovery
+- ✅ `removed` entry kind (v1.0 §3.6) — graph-evolution against in-flight runs
 
-**v0.3 follow-ups specifically motivated by these use cases:**
+**v1.1 follow-ups specifically motivated by these use cases:**
 
 - 🆕 `runWorkflowBatch(name, inputs[])` API — segment fanout
 - 🆕 `POST /api/workflows/:id/run-batch?stream=ndjson` — batched trigger ingestion

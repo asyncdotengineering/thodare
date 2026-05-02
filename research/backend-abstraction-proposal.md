@@ -4,7 +4,7 @@
 >
 > **v2 changes from v1.** Folds in 7 deep code reviews (~46k words) of `vercel/workflow`, `vercel/workflow-examples`, `vercel-labs/workflow-builder-template`, `cloudflare/dynamic-workflows`, `withastro/flue`, `rivet-gg/rivet`, plus n8n/ActivePieces/Sim Studio. v1 stays at `backend-abstraction-proposal.v1.md` for diffability.
 
-**One-line summary.** **Port the Backend abstraction itself** (three-port composition, append-only event log + materialized views, conformance suite, branded spec versions) — not as a wrapper for any single existing engine, but as Thodare's own substrate contract. Ship 5 first-party adapters that cover serverless / managed / self-host / dev. Add a first-class **Credential** primitive in v0.2 so the headless-substrate goal is real. Adopt Flue's three-verb CLI + no-`deploy` discipline. Fix the SPEC.md EditOp documentation drift. The JSON+EditOp surface stays untouched.
+**One-line summary.** **Port the Backend abstraction itself** (three-port composition, append-only event log + materialized views, conformance suite, branded spec versions) — not as a wrapper for any single existing engine, but as Thodare's own substrate contract. Ship 5 first-party adapters that cover serverless / managed / self-host / dev. Add a first-class **Credential** primitive in v1.0 so the headless-substrate goal is real. Adopt Flue's three-verb CLI + no-`deploy` discipline. Fix the SPEC.md EditOp documentation drift. The JSON+EditOp surface stays untouched.
 
 ---
 
@@ -19,7 +19,7 @@ Thodare is a **self-hostable, open-source, headless workflow orchestration engin
 
 Both consumers depend on the same substrate. The **Backend abstraction** makes the substrate pluggable so the same workflow JSON + the same EditOp surface runs against:
 
-- **Postgres self-host** (the current openworkflow path; default for v0.2)
+- **Postgres self-host** (the current openworkflow path; default for v1.0)
 - **SQLite** for `thodare dev` / single-binary local
 - **Cloudflare Workflows + dynamic-workflows** for serverless-managed
 - **Vercel WDK** (lifts WDK's 7 official + community Backends via one adapter)
@@ -75,15 +75,15 @@ Per `code-reviews/visual-builder-substrates.md` the gaps are concrete and priori
 | **No output `hiddenFromDisplay` flag** | **P0** | Sim has it. A `getCredentials` block whose output you plumb forward but the LLM should never reason about needs this. | ✅ §3.11 |
 | **No `paramVisibility: 'llm-only'`** | **P0** | Sim has 4 visibility brands; Thodare has 3. Computed values the LLM must fill but the user can't see in the form. | ✅ §3.11 |
 | **No container blocks / nesting / subflow ops** | **P1** | No for-each, no while, no parallel branches at the JSON level. AP `LOOP_ON_ITEMS` and Sim's `nestedNodes` cannot import. | ✅ §3.10 |
-| **`SubBlock.condition` is equality-only** | **P1** | n8n has 12 condition operators (`gte`, `lte`, `between`, `regex`, `exists`, etc.); Sim has function-typed conditions; AP has `DynamicProperties`. Thodare has `{field, value, not?}`. IF-node-style filters degrade to `type: 'json'`. | ⚠️ partial — `dynamicSchemas` (§3.12) covers AP-style; richer ops list deferred to v0.3 |
+| **`SubBlock.condition` is equality-only** | **P1** | n8n has 12 condition operators (`gte`, `lte`, `between`, `regex`, `exists`, etc.); Sim has function-typed conditions; AP has `DynamicProperties`. Thodare has `{field, value, not?}`. IF-node-style filters degrade to `type: 'json'`. | ⚠️ partial — `dynamicSchemas` (§3.12) covers AP-style; richer ops list deferred to v1.1 |
 | **No dynamic schema endpoint** | **P1** | Slack channel pickers, Sheets sheet pickers, Airtable table pickers — bread and butter of every visual builder — need a server endpoint that takes form state + auth and returns sub-schema. AP solves with `DynamicProperties.props()`; Thodare has nothing. | ✅ §3.12 |
 | **No `compute-edit-sequence` (diff → ops)** | **P1** | When a user drags a block on the canvas, the UI needs to emit a minimal `EditOp[]`. Sim ships this at `lib/workflows/training/compute-edit-sequence.ts`. Thodare can apply ops but can't synthesize them. | ✅ §3.14 |
-| **`SubBlock` types: 5 vs Sim's 28+** | **P2** | `code`, `slider`, `combobox`, `multi-select`, `file-upload`, `oauth-connection-selector` etc. all missing. | 🟠 v0.3 — incremental additions per use case demand |
+| **`SubBlock` types: 5 vs Sim's 28+** | **P2** | `code`, `slider`, `combobox`, `multi-select`, `file-upload`, `oauth-connection-selector` etc. all missing. | 🟠 v1.1 — incremental additions per use case demand |
 | **No timezone-aware sleeps** | **P1** | Marketing-automation needs "send at user's local 9am"; today only timezone-naive `step.sleep(Date)`. | ✅ §3.13 |
 | **No HTTP page-rendering / URL-as-trigger** | **P1** | Sales-funnel use case needs the runtime walker to block the HTTP response on the first compute block; URL patterns route to workflows. | ✅ §4.8 (`@thodare/router` companion) |
-| **No connector marketplace primitive** (per-org installed registry, sandboxed custom-connector execution) | **P0** for DAG-builder | DAG-workflow-builder use case (`usecases/dag-workflow-builder.md`) needs per-org installed-connector registry + per-org versioning + sandbox for enterprise custom code. | 🟠 v0.3 — held; first-party connectors ship as separate `@thodare/connector-*` npm packages (ActivePieces-style packaging) without the marketplace primitive. See `.internal/next-up.md`. |
+| **No connector marketplace primitive** (per-org installed registry, sandboxed custom-connector execution) | **P0** for DAG-builder | DAG-workflow-builder use case (`usecases/dag-workflow-builder.md`) needs per-org installed-connector registry + per-org versioning + sandbox for enterprise custom code. | 🟠 v1.1 — held; first-party connectors ship as separate `@thodare/connector-*` npm packages (ActivePieces-style packaging) without the marketplace primitive. See `.internal/next-up.md`. |
 
-The full 15-item list is in `code-reviews/visual-builder-substrates.md:§4.5`. **As of v1 design, 8 of 11 gaps are fully designed; 1 is partial; 2 are deferred to v0.3.**
+The full 15-item list is in `code-reviews/visual-builder-substrates.md:§4.5`. **As of v1 design, 8 of 11 gaps are fully designed; 1 is partial; 2 are deferred to v1.1.**
 
 ### 2.5 `SPEC.md` documents the wrong EditOp set *(NEW — verifiable bug)*
 
@@ -100,7 +100,7 @@ Bonus EditOp finding: **Thodare has 5 ops; Sim Studio has 5 ops; only 3 of 5 are
 
 Three alternatives were sketched in `_scratch-interface-design.md`. v1 recommended **Alternative B** (thin engine adapter wrap). The deep reviews refine that recommendation:
 
-> **Port the Backend abstraction *itself* (the three-port composition + event-sourcing + conformance-suite pattern from WDK), but ship adapters that wrap existing engines for v0.2.** The interface SHAPE is WDK's; the implementation strategy still wraps engines so we inherit their runtime track records.
+> **Port the Backend abstraction *itself* (the three-port composition + event-sourcing + conformance-suite pattern from WDK), but ship adapters that wrap existing engines for v1.0.** The interface SHAPE is WDK's; the implementation strategy still wraps engines so we inherit their runtime track records.
 
 This is the WDK reviewer's verbatim recommendation: *"Thodare ports the Backend abstraction itself ... but does not adopt the JS-source-code workflow definition. That gives Thodare engine portability (PG, SQLite, CF, Lambda, etc.) without paying the SWC/VM tax."*
 
@@ -312,7 +312,7 @@ The `credentialId` is the only way the LLM can reference a credential. The actua
 
 This pattern matches **n8n's `ICredentialType.authenticate` declarative signing** (`packages/nodes-base/credentials/SlackApi.credentials.ts`) and **ActivePieces' `PieceAuth.OAuth2 / SecretText / BasicAuth / CustomAuth`** (`packages/pieces/framework/src/lib/property/authentication/index.ts:10-74`). It does **not** match Vercel WDK (which has no credential model) — `backend-wdk` adapter handles credentials at the Thodare layer and injects them into WDK steps via the same `ctx.credential` shim.
 
-**This is the P0 unblock for the headless-substrate goal.** Without it, no n8n-class / AP-class / Sim-class application can be built on Thodare without reinventing this. Ship in v0.2 alongside the Backend abstraction, NOT deferred.
+**This is the P0 unblock for the headless-substrate goal.** Without it, no n8n-class / AP-class / Sim-class application can be built on Thodare without reinventing this. Ship in v1.0 alongside the Backend abstraction, NOT deferred.
 
 ### 3.6 The `removed` entry kind — Rivet's gift
 
@@ -459,7 +459,7 @@ export interface SerializedBlock {
 **Per-iteration steps vs. per-iteration runs** — the design choice:
 
 - **`foreach` with `parallelism > 1`** spawns one `step.run` per item, all inside the parent run. Parent run's `Storage.steps.list` returns N step rows for the iteration body. Cheaper at scale than spawning N runs.
-- **For very high cardinality** (millions of items in a segment, per `_common-patterns.md`), use the v0.3 `runWorkflowBatch(name, inputs[])` API instead — fans out to N independent runs.
+- **For very high cardinality** (millions of items in a segment, per `_common-patterns.md`), use the v1.1 `runWorkflowBatch(name, inputs[])` API instead — fans out to N independent runs.
 
 **Container-specific outputs** (canonical):
 
@@ -480,7 +480,7 @@ outputs: { iterations: number; finalState: T }
 **Adapter responsibilities:**
 - `backend-self-host-postgres` / `backend-aws`: implements via per-iteration `step.run` inside the parent run.
 - `backend-cloudflare`: CF Workflows supports `step.do` inside `Promise.all([...])` natively — body iterations map 1:1.
-- All adapters set `capabilities.supportsContainerBlocks: true | false`. Adapters that can't (none expected in v0.2) must reject workflow JSON containing container blocks at validation time.
+- All adapters set `capabilities.supportsContainerBlocks: true | false`. Adapters that can't (none expected in v1.0) must reject workflow JSON containing container blocks at validation time.
 
 **Tests added to the contract suite:**
 - `21. Container — foreach-sequential` — body runs N times in order; outputs collected.
@@ -584,7 +584,7 @@ defineConnector({
 
 **Adapter responsibilities:** none — this is engine + API only. The endpoint runs in `@thodare/api` against the connector's `dynamicSchemas[refreshFor]` callback, with the credential resolved + injected per the org context.
 
-**Capability flag:** `supportsDynamicSchemas: boolean` — false only for adapters that can't run arbitrary callbacks at refresh time (none expected in v0.2).
+**Capability flag:** `supportsDynamicSchemas: boolean` — false only for adapters that can't run arbitrary callbacks at refresh time (none expected in v1.0).
 
 **Tests:**
 - `28. Dynamic schema refresh — happy path` — canvas POSTs form state; receives fresh sub-block schema; renders dropdown.
@@ -702,30 +702,30 @@ Per `code-reviews/kapso.md` §8a — Kapso's `kapso-workflows/src/json.ts` produ
 
 ## 4. The adapter roster v2
 
-### 4.1 Ships in v0.2 (the headline release) — platform-native backends
+### 4.1 Ships in v1.0 (the headline release) — platform-native backends
 
 **Architectural principle (refined post-v2):** **one native Backend per platform, each composed of that platform's own primitives.** Not a wrapper around another framework's runtime. Same shape as Flue's "Deploy Anywhere" matrix — Cloudflare gets a Cloudflare-native Backend using CF Workflows / Queues / DO / D1 directly; Vercel gets a Vercel-native Backend using Vercel Postgres / Blob / Cron / Functions directly; etc. No transitive dependency on another framework's evolution; platform-native pricing, semantics, deploy tools, and debugging all surface to the user unchanged.
 
 | Package | Platform | Composed from (the platform's own primitives) | LoC estimate |
 |---|---|---|---|
-| `@thodare/backend-self-host-postgres` | **Self-host** (Node + Postgres) — default for v0.2 | Postgres + worker container; deployable to Fly / Railway / Render / VPS / on-prem | ~150 |
+| `@thodare/backend-self-host-postgres` | **Self-host** (Node + Postgres) — default for v1.0 | Postgres + worker container; deployable to Fly / Railway / Render / VPS / on-prem | ~150 |
 | `@thodare/backend-self-host-sqlite` | **Single-binary local** for `thodare dev` and demos | SQLite + in-process worker | ~50 |
 | `@thodare/backend-cloudflare` | **Cloudflare-native** | CF Workflows + Queues + DO + D1 + R2. Uses `cloudflare/dynamic-workflows@^0.1.1` *internally* for tenant routing (implementation detail, not exposed). | **~150** |
 | `@thodare/backend-vercel` | **Vercel-native** | Vercel Postgres (Neon) + Vercel Blob + Vercel Cron + Vercel Functions. **No WDK dependency.** | ~250 |
 | `@thodare/backend-aws` | **AWS-native** | RDS Postgres + SQS + Lambda + S3. EventBridge for cron. Step Functions optional for orchestrator path. | ~400 |
 
-**v0.2 ships five platform-native backends.** Each composes its host platform's own primitives directly. Plus the credential model lands in the same release. That is the value proposition.
+**v1.0 ships five platform-native backends.** Each composes its host platform's own primitives directly. Plus the credential model lands in the same release. That is the value proposition.
 
 > **What changed from earlier drafts.** Earlier drafts framed `backend-wdk` as an "inheritance play — one adapter, seven inherited backends" by wrapping Vercel's WDK. That framing is wrong — it couples Thodare to WDK's evolution, ships unwanted Vercel-flavored deploy semantics on every WDK-derived backend, and leaks WDK's directive + SWC pipeline into deployments that have no use for either. **Each platform should be reached by its own primitives.** WDK still exists as an *opt-in* adapter (§4.6) for users who specifically want directive-style authoring, but it is not how Thodare reaches Vercel.
 
-### 4.2 Ships in v0.3+ (validated by user demand)
+### 4.2 Ships in v1.1+ (validated by user demand)
 
 | Package | When | Why deferred |
 |---|---|---|
 | `@thodare/backend-netlify` | A Netlify user asks | Netlify DB + Blob + Background Functions; ~300 LoC. Same shape as `backend-vercel`. |
 | `@thodare/backend-fly-machines` | A user wants always-on per-tenant compute | Fly Machines + per-tenant LiteFS; container-shaped, not serverless. |
-| `@thodare/backend-rivetkit-engine` | When a user champions it | **Tractable for v0.2 if there's a champion** (~400-600 LoC per Rivet review). No FoundationDB required (Rivet OSS = Postgres + NATS), no Rivet binary. Implements the 11-method `EngineDriver` over Thodare's Postgres. |
-| `@thodare/backend-inngest` | A user already on Inngest asks | Drops here from v0.2 — the platform-native principle says Inngest is not a *platform*, it's a *service*; users adopting Inngest get more value building on the underlying CF/Vercel/AWS native Backend. |
+| `@thodare/backend-rivetkit-engine` | When a user champions it | **Tractable for v1.0 if there's a champion** (~400-600 LoC per Rivet review). No FoundationDB required (Rivet OSS = Postgres + NATS), no Rivet binary. Implements the 11-method `EngineDriver` over Thodare's Postgres. |
+| `@thodare/backend-inngest` | A user already on Inngest asks | Drops here from v1.0 — the platform-native principle says Inngest is not a *platform*, it's a *service*; users adopting Inngest get more value building on the underlying CF/Vercel/AWS native Backend. |
 | `@thodare/backend-temporal` | A Temporal shop asks | Temporal's worker model is the "we don't want this" reference; only build if a real customer pays. |
 | `@thodare/backend-native` | Probably never | The "Alternative A" trap. Build only if a clear gap emerges that nothing else fills. |
 | `@thodare/supervisor` | When self-host docker users want process isolation | Tiny Rust binary that forks one Node/Bun process per workflow worker — independent restart, isolated memory. Lifted from Encore's `supervisor-encore` pattern (`code-reviews/encore-ts.md` §4: `supervisor/src/supervisor.rs:32-110`). Packaging concern; not architecture. |
@@ -879,7 +879,7 @@ return new Response(html, { headers: { "Content-Type": "text/html" } });
 
 **Adapter responsibilities:** every Backend must implement `awaitFirstBlockResult` — it's a small refactor (the runtime walker already runs the first compute block synchronously by definition; the option just exposes its result).
 
-**Capability flag:** `supportsAwaitFirstBlockResult: boolean` — true for all v0.2 adapters. False for any future Backend where the runtime walker doesn't sit on the request path (some serverless triggers).
+**Capability flag:** `supportsAwaitFirstBlockResult: boolean` — true for all v1.0 adapters. False for any future Backend where the runtime walker doesn't sit on the request path (some serverless triggers).
 
 **Why a companion package, not core:**
 - Most use cases (notification / marketing-automation / dag-workflow-builder) don't need URL-pattern routing — they're triggered via webhooks or events.
@@ -943,7 +943,7 @@ This is **the proof point** — once a second adapter passes contract tests, the
 - `examples/deploy-vercel/`, `examples/deploy-aws/`, plus the existing `examples/deploy-cloudflare/`
 - Per-adapter docs page in the deploy quadrant.
 - **Headless-builder demo:** `examples/headless-ui-demo/` — a minimal canvas (React Flow + 200 LoC of glue) that reads from `@thodare/api` and proves the substrate story. Same demo runs against every adapter; only the deploy target changes.
-- *(deferred to v0.3+)* `packages/backend-wdk/` (opt-in only; ~150 LoC), `packages/backend-netlify/`, `packages/backend-rivetkit-engine/`, `packages/backend-inngest/`
+- *(deferred to v1.1+)* `packages/backend-wdk/` (opt-in only; ~150 LoC), `packages/backend-netlify/`, `packages/backend-rivetkit-engine/`, `packages/backend-inngest/`
 
 ### Phase 5b — Ship the v1 visual-builder gap closures (~3 weeks, parallelizable with Phase 5)
 
@@ -956,9 +956,9 @@ These close the §2.4 gap list. Each is independently shippable; collectively th
 - **§3.14 Diff → ops endpoint + `@thodare/diff-helper` package** (~1 week) — `POST /api/workflows/:id/diff` + canonical algorithm + reusable client helper. Contract tests #33–35.
 - **§4.8 `@thodare/router` companion package** (~1 week) — sales-funnel HTTP page-rendering + URL-as-trigger. Engine adds `awaitFirstBlockResult` opt to `runWorkflow`. Contract tests #36–37 + router-specific tests.
 
-**First-party connector packages** (~5 days, parallel) — ship the ActivePieces-style first-party connector library structure as a starter set: `@thodare/connector-slack`, `@thodare/connector-resend`, `@thodare/connector-github`, `@thodare/connector-stripe`, `@thodare/connector-google-sheets`. Each package = one-vendor connector set, independently versioned via Changesets. **No marketplace primitive yet** (per-org installed registry + sandboxed custom-connector execution deferred to v0.3 — see `.internal/next-up.md`); customers consume the packages via plain `npm install`.
+**First-party connector packages** (~5 days, parallel) — ship the ActivePieces-style first-party connector library structure as a starter set: `@thodare/connector-slack`, `@thodare/connector-resend`, `@thodare/connector-github`, `@thodare/connector-stripe`, `@thodare/connector-google-sheets`. Each package = one-vendor connector set, independently versioned via Changesets. **No marketplace primitive yet** (per-org installed registry + sandboxed custom-connector execution deferred to v1.1 — see `.internal/next-up.md`); customers consume the packages via plain `npm install`.
 
-### Phase 6 — Deprecate the direct openworkflow API (~v0.3, separate release)
+### Phase 6 — Deprecate the direct openworkflow API (~v1.1, separate release)
 
 - `createWfkit({ backend })` removed.
 - `createWfkit({ backend })` is the only path.
@@ -971,7 +971,7 @@ These close the §2.4 gap list. Each is independently shippable; collectively th
 
 ## 6. The CLI + deploy story — Flue patterns lifted
 
-Per `code-reviews/flue.md` the proposed `thodare` CLI for v0.2:
+Per `code-reviews/flue.md` the proposed `thodare` CLI for v1.0:
 
 ```
 thodare init                              # scaffold a new project (one of the few one-shot verbs)
@@ -1103,7 +1103,7 @@ To be precise about scope:
 - ❌ Thodare does **not** import n8n nodes / AP pieces / Sim blocks as Thodare connectors. Cross-project connector portability is a separate question the headless-substrate developer can solve in their own application.
 - ❌ Thodare is **not** competing with n8n / AP / Sim at the UI/product layer. It's the substrate they (or applications like them) build on.
 
-The 15-item gap list in §2.4 + `code-reviews/visual-builder-substrates.md:§4.5` is what makes Thodare a credible backend for those applications. Three are P0 (credentials, output `hiddenFromDisplay`, `llm-only` visibility). Phase 2 ships P0 credentials. Phases 5-6 + a v0.3 follow-up ship the rest.
+The 15-item gap list in §2.4 + `code-reviews/visual-builder-substrates.md:§4.5` is what makes Thodare a credible backend for those applications. Three are P0 (credentials, output `hiddenFromDisplay`, `llm-only` visibility). Phase 2 ships P0 credentials. Phases 5-6 + a v1.1 follow-up ship the rest.
 
 ---
 
@@ -1145,7 +1145,7 @@ CF Workflows at 10M runs/day = ~$6.1k/mo (per `cloudflare-as-world.md`). Self-ho
 
 ### 8.6 Credential model lock-in
 
-Once Thodare ships the `Credential` artifact in v0.2, changing it later breaks every adapter and every consumer. **Mitigation:** the API is versioned (per spec-version cascade), and the storage schema uses jsonb for `properties` so new credential types don't require a migration. The branded `SpecVersion` in §3.4 prevents runaway drift.
+Once Thodare ships the `Credential` artifact in v1.0, changing it later breaks every adapter and every consumer. **Mitigation:** the API is versioned (per spec-version cascade), and the storage schema uses jsonb for `properties` so new credential types don't require a migration. The branded `SpecVersion` in §3.4 prevents runaway drift.
 
 ### 8.7 The "wait, is Cloudflare's `dynamic-workflows` stable enough to depend on?" risk
 
@@ -1155,14 +1155,14 @@ It shipped 2026-05-01 at version 0.1.1. Per `code-reviews/dynamic-workflows.md`:
 
 ## 9. Success metrics — Black Friday is the benchmark
 
-For v0.2 to ship as "done":
+For v1.0 to ship as "done":
 
 ### Functional
 
 - [ ] Five adapters in the workspace, all green on `@thodare/backend-contract-tests`.
 - [ ] **Credential primitive shipped** with end-to-end test covering encrypt-at-rest + never-leaks-to-LLM + multi-tenant isolation.
 - [ ] All existing 209 tests pass with no regressions; new total ≥ 280 (contract suite + credential + tombstone + resume/recover tests).
-- [ ] Backward compat: `createWfkit({ backend })` works in v0.2 with deprecation warning.
+- [ ] Backward compat: `createWfkit({ backend })` works in v1.0 with deprecation warning.
 - [ ] Migration codemod ships in same release.
 - [ ] Every adapter ships a `examples/deploy-<adapter>/` workspace that boots with `pnpm install && pnpm dev` and runs end-to-end.
 - [ ] `examples/headless-ui-demo/` ships and runs against all 5 adapters.
@@ -1189,7 +1189,7 @@ For v0.2 to ship as "done":
 - [ ] CLI surface ≤ 4 verbs (`init`, `dev`, `run`, `build`) — no `deploy`.
 - [ ] Each adapter's README documents pricing at three scales (10k / 1M / 10M runs/day) with verifiable math.
 - [ ] Every adapter's README documents headless-friendliness matrix (live subscription / step IO / resume-from-step / live latency).
-- [ ] **`thodare-skills/` directory ships** at v0.2 — Claude Code / Cursor / Codex / Gemini compatible — covering every primitive (define a workflow, define a connector, define a credential, patch via EditOps, run + observe). Per `code-reviews/iii-dev.md` §5 — iii ships 26 first-party SkillKit skills; raises the bar for "AI-buildable framework."
+- [ ] **`thodare-skills/` directory ships** at v1.0 — Claude Code / Cursor / Codex / Gemini compatible — covering every primitive (define a workflow, define a connector, define a credential, patch via EditOps, run + observe). Per `code-reviews/iii-dev.md` §5 — iii ships 26 first-party SkillKit skills; raises the bar for "AI-buildable framework."
 
 ---
 

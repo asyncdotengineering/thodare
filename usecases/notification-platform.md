@@ -223,7 +223,7 @@ The substrate-swap promise made concrete.
 | Workflow JSON storage + versioning | ✅ engine + API | — |
 | EditOp patch loop with skip-don't-reject | ✅ engine + API | — |
 | Multi-tenant scoping (per-customer org) | ✅ T11 enforcement | — |
-| Credential vault + OAuth flows | ✅ engine + API (v0.2) | OAuth-provider-specific config |
+| Credential vault + OAuth flows | ✅ engine + API (v1.0) | OAuth-provider-specific config |
 | Live SSE run subscription | ✅ API + capability flag | — |
 | Step IO inspection | ✅ Storage.steps.list | drop-off analytics on top |
 | Connector registry inspection (`GET /api/connectors`) | ✅ API | — |
@@ -250,9 +250,9 @@ Per `research/code-reviews/visual-builder-substrates.md` and `research/backend-a
 | Output `hiddenFromDisplay` flag | A `fetchUserProfile` block returns the user's auth token for downstream personalization but the LLM should never reason about it | **P0** (Sim has it; Thodare doesn't) |
 | `paramVisibility: 'llm-only'` | Computed values like `__internal_correlation_id` the LLM must fill but the marketer can't see in the form | **P0** |
 | Native fan-out from a segment | One trigger event → one workflow run is fine. One *segment* → N runs (one per user) needs either a custom block that calls `runWorkflow` in a loop, or a native pattern. Scaling the loop pattern to 100M users requires throughput Thodare's API isn't currently shaped for. | **P2** |
-| High-throughput trigger ingestion | At PushKit's scale, raw event volume is 100k events/sec. Each event → 0-N workflow runs. Thodare's API would need a queue-shaped trigger ingestion endpoint instead of one-run-per-HTTP-request. | **P2** for v0.2; **P0** for vertical SaaS scale |
+| High-throughput trigger ingestion | At PushKit's scale, raw event volume is 100k events/sec. Each event → 0-N workflow runs. Thodare's API would need a queue-shaped trigger ingestion endpoint instead of one-run-per-HTTP-request. | **P2** for v1.0; **P0** for vertical SaaS scale |
 
-The first 5 are already in the proposal v2's prioritized gap list. The last 2 are vertical-specific extensions that could be the topic of a v0.3 RFC ("Thodare for high-throughput verticals").
+The first 5 are already in the proposal v2's prioritized gap list. The last 2 are vertical-specific extensions that could be the topic of a v1.1 RFC ("Thodare for high-throughput verticals").
 
 ## 8. The five-line pitch PushKit puts on its homepage
 

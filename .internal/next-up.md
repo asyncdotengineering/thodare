@@ -172,7 +172,7 @@ don't redesign decisions T1–T19 already made).
   - Example deployment under `examples/deploy-cf-workers/`.
 - **SPEC §:** v0 deferred. Big lift; consider after Tier 1.
 
-### Connector marketplace primitives — *held for v0.3 per backend-abstraction-proposal §2.4*
+### Connector marketplace primitives — *held for v1.1 per backend-abstraction-proposal §2.4*
 
 - **Status (2026-05-02).** **Held.** v1 ships first-party connectors
   as separate `@thodare/connector-*` npm packages (ActivePieces-style
@@ -180,11 +180,11 @@ don't redesign decisions T1–T19 already made).
   `@thodare/connector-google-sheets`, etc.). Customers `npm install`
   what they need. The marketplace primitive (per-org installed
   registry + per-org versioning + sandboxed custom-connector
-  execution) is a **v0.3+ effort**.
+  execution) is a **v1.1+ effort**.
 - **Why deferred.** The DAG-workflow-builder use case
   (`usecases/dag-workflow-builder.md`) needs the full marketplace —
   per-org installed registry, per-org connector pinning, sandboxed
-  enterprise custom code. Building this in v0.2 is at least a 3-week
+  enterprise custom code. Building this in v1.0 is at least a 3-week
   effort + ongoing maintenance burden. Shipping first-party
   connectors as plain npm packages closes 80% of the value at 10%
   of the cost; the remaining 20% (custom per-org code, marketplace UI,
@@ -194,7 +194,7 @@ don't redesign decisions T1–T19 already made).
   many Thodare deployments — and lets enterprise customers ship their
   own private connector code without granting Thodare full Node
   access.
-- **Acceptance (when v0.3 picks this up).**
+- **Acceptance (when v1.1 picks this up).**
   - `packages/connector-marketplace/` — per-org installed-connector
     registry table, CRUD endpoints, per-org version pinning.
   - `packages/connector-sandbox/` — adapter for sandboxed execution

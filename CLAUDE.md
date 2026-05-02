@@ -127,6 +127,17 @@ The vendored openworkflow uses the same strictness presets — that's why the wo
 5. Update docs in the right Diataxis quadrant (T18).
 6. Full check: `pnpm install && pnpm -r run build && pnpm test`.
 
+## Release discipline — Alpha → GA, no flags, build in public
+
+Full discipline at [`RELEASE.md`](./RELEASE.md). The headline rules a future Claude session must follow:
+
+- **Two stages: Alpha → GA. No Beta. No feature flags as gating.** A feature lands in `main` immediately after merge gates pass; published to npm under the `alpha` dist-tag. After dogfooding shows it works without surprise, cut a real release via `pnpm changeset version && pnpm release`. Do not invent intermediate gates, per-feature env vars, or per-org toggles — the project is solo-dogfood with no customers, and that discipline would be tax.
+- **Capability flags are NOT feature flags.** `BackendCapabilities` (per `research/backend-abstraction-proposal.md` §3) declare what an adapter supports — they're interface declarations the frontend uses to hide unsupported UI affordances. They stay. Do NOT add new env-var gates with names like `THODARE_FEATURES_X=enabled` — those are exactly the flag-gating discipline this project doesn't want.
+- **Versioning is `1.0.0-alpha.N` → `1.0.0` → `1.x.y` → `2.0.0`.** Changesets-driven, semver-strict. Today the workspace sits at `0.1.x`; the planned `1.0.0` ships everything in the backend-abstraction proposal. The `v0.2 / v0.3+` labels in earlier proposal drafts are obsolete — use `v1.0 / v1.1+ / v2.0` per the corrected versioning.
+- **Pre-merge gates** (every PR): `pnpm test` green, `tsc --noEmit` clean, 4–10 new tests per change, `@thodare/backend-contract-tests` green on every adapter the feature touches (or `capabilities.supportsX === false` declared honestly), Changeset added, docs drafted in the right Diataxis quadrant. No exceptions.
+- **Per-feature rollback note**: every significant feature ships with one paragraph in its docs page — "if this breaks for you, revert your workflow JSON to the pre-feature shape, or downgrade `@thodare/<pkg>@<prior-version>`." Not a runbook; one paragraph. The capability flag handles the UI gracefully.
+- **When the project gains traction**, `RELEASE.md` §"When this doc grows" lists the order to add gates back in (Beta stage → env-var gating → SLA thresholds → multi-section runbooks). Today is none of those. Don't pre-pay.
+
 ## Environment cheat sheet
 
 ```sh

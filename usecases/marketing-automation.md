@@ -322,7 +322,7 @@ Three-stage scaling. JourneyHQ would document this for self-hosting customers + 
 - DynamoDB for per-subscriber state (frequency caps, opt-ins).
 - ClickHouse (separate from Thodare; queried for customer-facing analytics).
 
-OR `backend-cloudflare` if global edge ingestion is the priority (CF Workers at the SDK ingestion endpoint). The two adapters are not mutually exclusive — JourneyHQ could run `backend-cloudflare` for the trigger ingestion + `backend-aws` for the heavy backend orchestration via Thodare's queue federation (deferred to v0.3).
+OR `backend-cloudflare` if global edge ingestion is the priority (CF Workers at the SDK ingestion endpoint). The two adapters are not mutually exclusive — JourneyHQ could run `backend-cloudflare` for the trigger ingestion + `backend-aws` for the heavy backend orchestration via Thodare's queue federation (deferred to v1.1).
 
 ## 6. What Thodare provides vs. what JourneyHQ builds
 
@@ -334,7 +334,7 @@ OR `backend-cloudflare` if global edge ingestion is the priority (CF Workers at 
 | Long durable sleeps (months) | ✅ via `step.sleep` | — |
 | `wait_for_event` with correlation + timeout | ✅ | — |
 | Multi-tenant per-org isolation | ✅ T11 | — |
-| Credential vault (SendGrid, Twilio, ESP) | ✅ v0.2 | — |
+| Credential vault (SendGrid, Twilio, ESP) | ✅ v1.0 | — |
 | Live SSE for run timeline | ✅ | — |
 | Step IO for drop-off analytics | ✅ via `Storage.steps.list` | drop-off dashboards |
 | Predictive ML (LTV, churn, send-time) | — | their domain — exposed as connectors |
@@ -361,7 +361,7 @@ This use case stresses Thodare more than any other. The proposal v2 already has 
 | **`wait_until_timestamp` with timezone awareness** | "Send at 9am in customer's local timezone" is the most common pattern in marketing automation. Thodare's `wait_duration` is timezone-naive. | **P1** — extension that takes (timezone, hour, minute) and computes a Date |
 | **Trigger deduplication** | A customer who triggers `viewed_product` 50 times in 5 minutes shouldn't enter the journey 50 times. Need built-in dedupe with windowing. | **P1** — could be a trigger-level option `deduplicate: { keyField, windowMinutes }` |
 | **Frequency cap enforcement** | Cross-flow: "this customer already got 3 emails today, suppress". Currently each `send_email` block must check externally. Could be an engine-level concern. | **P2** — best left to JourneyHQ's domain layer |
-| **High-cardinality fan-out (segment → millions of runs)** | "Run this flow for every customer in segment X" can mean millions of run dispatches in seconds. Thodare's `runWorkflow` API isn't shaped for that throughput. | **P2** — likely needs a dedicated `runWorkflowBatch(name, inputs[])` API for v0.3 |
+| **High-cardinality fan-out (segment → millions of runs)** | "Run this flow for every customer in segment X" can mean millions of run dispatches in seconds. Thodare's `runWorkflow` API isn't shaped for that throughput. | **P2** — likely needs a dedicated `runWorkflowBatch(name, inputs[])` API for v1.1 |
 | **Drop-off analytics queries at scale** | Marketer dashboard wants "for this flow over the last 30 days, how many subscribers reached step N, how many converted at step N+1, average time between, etc." Thodare's `Storage.steps.list` returns rows; analytics need OLAP queries. | **P3** — JourneyHQ pipes `step_completed` events to ClickHouse; document the pattern |
 | **A/B testing primitive** | Currently can be expressed via a custom `random_split` block; could be an engine-level concept that auto-tracks variant performance. | **P3** — leave to userland |
 | **Send-time scheduling at the queue layer** | "Schedule this email for delivery at exactly 2026-05-15T14:00:00Z" needs the queue to honor `delaySeconds` precisely. Both `backend-self-host-postgres` and `backend-cloudflare` support this. | works today |

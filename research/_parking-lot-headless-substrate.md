@@ -95,7 +95,7 @@ The v2 contract-test suite must include UI-consumer-shaped tests:
 
 ### Adapter roster gets a new dimension
 
-Each v0.2 adapter's README must include a "Headless-UI suitability" matrix:
+Each v1.0 adapter's README must include a "Headless-UI suitability" matrix:
 
 | | backend-openworkflow-pg | backend-cloudflare-dynamic | backend-wdk | backend-inngest |
 |---|---|---|---|---|

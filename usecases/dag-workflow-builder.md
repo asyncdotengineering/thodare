@@ -153,7 +153,7 @@ This is the leverage that makes 500 connectors achievable for a small team. Acti
 - Durable execution + retries + sleeps (Thodare engine + Backend)
 - Workflow JSON + EditOp loop + skip-don't-reject (Thodare engine)
 - Multi-tenant scoping (Thodare T11)
-- Credential vault (Thodare engine v0.2)
+- Credential vault (Thodare engine v1.0)
 - OAuth flow plumbing per provider (Thodare's `defineCredentialType.test` + standard OAuth2 helpers)
 - Live SSE for run timeline (Thodare API + Backend capability)
 - Step IO storage + drop-off analytics (Thodare's `Storage.steps.list`)
@@ -224,12 +224,12 @@ This use case stresses Thodare's **breadth + multi-tenant scaling** more than an
 
 ### Stage 3 — scale / 1000+ customers, billions of events/month
 
-**Two-Backend hybrid** (a v0.3 capability per `_common-patterns.md` §11):
+**Two-Backend hybrid** (a v1.1 capability per `_common-patterns.md` §11):
 
 - **`backend-cloudflare`** at the edge for **trigger ingestion** + connector inspection — global low-latency for webhooks from any user's app.
 - **`backend-aws`** for the **heavy orchestration** — RDS Postgres + SQS + Lambda + S3. Better cost control at petabyte scale.
 
-The headless story makes this hybrid practical: same workflow JSON, same connectors, same canvas — federate across two Backends via Thodare's queue-federation (deferred to v0.3). Documented as "the FlowForge scale playbook."
+The headless story makes this hybrid practical: same workflow JSON, same connectors, same canvas — federate across two Backends via Thodare's queue-federation (deferred to v1.1). Documented as "the FlowForge scale playbook."
 
 ### Self-host customers
 
@@ -247,7 +247,7 @@ ActivePieces' biggest selling point is **MIT + self-host + your data stays yours
 | Workflow definition + persistence + EditOp | ✅ | — |
 | Run state + replay + retries + sleeps | ✅ | — |
 | Multi-tenant per-org isolation | ✅ T11 | — |
-| Credential vault | ✅ v0.2 | OAuth-provider-specific configs |
+| Credential vault | ✅ v1.0 | OAuth-provider-specific configs |
 | Live SSE run timeline | ✅ | — |
 | Step IO inspection | ✅ | drop-off + revenue analytics |
 | Container blocks (loops/parallel/branches) | ✅ if §3.11 ships | — |
@@ -267,9 +267,9 @@ For this use case **Thodare provides ~30-40% of the engineering by LoC** — con
 | Gap | Severity for FlowForge | Status in proposal |
 |---|---|---|
 | **Container blocks (loops + parallel + branch)** | **P0** — without these, FlowForge cannot ship. "For each row in Sheet" is the most-used pattern in iPaaS. | §2.4 P1 — listed; needs §3.X design (Edit A in audit) |
-| **Connector marketplace primitive** (per-org installed registry + versioning) | **P0** — FlowForge's whole product is "you install the connectors you need." | NOT in proposal — could be v0.3 add as `@thodare/connector-marketplace` extension |
-| **Sandboxed custom-connector execution** | **P1** — enterprise customers want to ship their own connector code without granting Thodare full Node access | NOT in proposal — could be v0.3 (use libkrun / e2b / Modal sandboxes per `iii-dev` review's pattern) |
-| **High-throughput webhook ingestion (any URL → any workflow)** | **P0** — FlowForge ingests webhooks from EVERY app on the internet | _common-patterns v0.3 + sales-funnel review's HTTP-as-trigger gap |
+| **Connector marketplace primitive** (per-org installed registry + versioning) | **P0** — FlowForge's whole product is "you install the connectors you need." | NOT in proposal — could be v1.1 add as `@thodare/connector-marketplace` extension |
+| **Sandboxed custom-connector execution** | **P1** — enterprise customers want to ship their own connector code without granting Thodare full Node access | NOT in proposal — could be v1.1 (use libkrun / e2b / Modal sandboxes per `iii-dev` review's pattern) |
+| **High-throughput webhook ingestion (any URL → any workflow)** | **P0** — FlowForge ingests webhooks from EVERY app on the internet | _common-patterns v1.1 + sales-funnel review's HTTP-as-trigger gap |
 | **Connector versioning + per-org pinning** | **P1** — workflows author against `connectors-slack@2.1.0`; can't auto-upgrade to `2.2.0` mid-flight | The `removed` entry kind §3.6 handles deletion; adding versioning needs the connector registry |
 | **Dynamic schema for connector forms** | **P0** — every Slack channel picker / Sheets sheet picker needs this | §2.4 P1 (Edit C in audit) |
 | **`paramVisibility: 'llm-only'` + output `hiddenFromDisplay`** | **P0** — when a workflow chains 10 connectors, sensitive fields must not leak into the LLM's view of intermediate state | §2.4 P0 (Edits B in audit) |

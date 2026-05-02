@@ -177,7 +177,7 @@ A "complete" Backend implements all traits. A degraded backend (e.g., a pure que
 
 - The seam is at the right level: Thodare wraps existing durable engines instead of competing with them.
 - Surface is small enough to document on one page.
-- Five strong adapters can ship in v0.2:
+- Five strong adapters can ship in v1.0:
   - `@thodare/backend-openworkflow-pg` (current default, no behavior change for existing users)
   - `@thodare/backend-openworkflow-sqlite` (dev / local — for `thodare dev` ergonomics)
   - `@thodare/backend-cloudflare` (CF Workflows + Queues + DO storage)
