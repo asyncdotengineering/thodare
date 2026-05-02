@@ -1,4 +1,4 @@
-export type { ThodareBackend } from "./types.js";
+export type { ThodareBackend, BackendCore } from "./types.js";
 export type {
   WorkflowSpec,
   RegisteredWorkflow,
@@ -26,7 +26,12 @@ export type {
   HookListFilter,
 } from "./storage.js";
 
-export type { Queue } from "./queue.js";
+export type {
+  Queue,
+  QueuePush,
+  QueuePull,
+  QueueEmbedded,
+} from "./queue.js";
 export type {
   MessageId,
   ValidQueueName,

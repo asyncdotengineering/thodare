@@ -91,7 +91,10 @@ export interface RunHandle {
 
 // ── Backend ──
 
-export interface ThodareBackend extends Storage, Queue, Streamer {
+// The mode-independent backend surface — id, capabilities, lifecycle,
+// and the workflow-control verbs. Composed with Storage, Streamer,
+// and a discriminated Queue variant to form ThodareBackend.
+export interface BackendCore {
   readonly id: string;
   readonly capabilities: BackendCapabilities;
   readonly specVersion?: SpecVersion;
@@ -130,7 +133,10 @@ export interface ThodareBackend extends Storage, Queue, Streamer {
     ctx?: Record<string, unknown>,
   ): Promise<Uint8Array | undefined>;
 
-  getDeploymentId?(): Promise<string>;
-
   resolveLatestDeploymentId?(): Promise<string>;
 }
+
+// `Queue` is a discriminated union (QueuePush | QueuePull | QueueEmbedded);
+// `mode` narrows the queue surface. TS distributes the intersection over
+// the union so `backend.mode === "push"` narrows the entire backend.
+export type ThodareBackend = BackendCore & Storage & Streamer & Queue;

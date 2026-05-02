@@ -159,11 +159,17 @@ export function runContractTests(
   }
 
   // ── Mode-specific (18-20, gated by Queue.mode) ──
+  //
+  // The Queue is a discriminated union; we narrow `backend` by `mode`
+  // before passing it to a mode-specific register function. The
+  // `if (backend.mode !== ...) return;` guard inside each describe body
+  // gives TS the flow narrow that describe.skipIf cannot communicate.
 
   describe
     .skipIf(backend.mode !== "push")(
       `mode/push (mode = ${backend.mode})`,
       () => {
+        if (backend.mode !== "push") return;
         if (packPredicate("mode/push", options)) {
           registerPushMode(backend);
         }
@@ -174,6 +180,7 @@ export function runContractTests(
     .skipIf(backend.mode !== "pull")(
       `mode/pull (mode = ${backend.mode})`,
       () => {
+        if (backend.mode !== "pull") return;
         if (packPredicate("mode/pull", options)) {
           registerPullMode(backend);
         }
@@ -184,6 +191,7 @@ export function runContractTests(
     .skipIf(backend.mode !== "embedded")(
       `mode/embedded (mode = ${backend.mode})`,
       () => {
+        if (backend.mode !== "embedded") return;
         if (packPredicate("mode/embedded", options)) {
           registerEmbeddedMode(backend);
         }

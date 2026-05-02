@@ -1,4 +1,3 @@
-// MessageId is branded — callers cannot fabricate it.
 declare const MessageIdBrand: unique symbol;
 export type MessageId = string & {
   readonly [MessageIdBrand]: typeof MessageIdBrand;
@@ -32,23 +31,37 @@ export type QueueHandler = (
   ctx: { messageId: MessageId; attemptCount: number },
 ) => Promise<void>;
 
-export interface Queue {
-  readonly mode: "push" | "pull" | "embedded";
-
+// Common surface every queue mode shares.
+interface QueueCore {
   queue(
     name: ValidQueueName,
     payload: QueuePayload,
     opts?: QueueOptions,
   ): Promise<{ messageId: MessageId | null }>;
 
+  getDeploymentId?(): Promise<string>;
+}
+
+// Push: substrate POSTs deliveries to a well-known route. Vercel queues,
+// graphile-worker, in-process.
+export interface QueuePush extends QueueCore {
+  readonly mode: "push";
   createQueueHandler(
     prefix: QueuePrefix,
     handler: QueueHandler,
   ): (req: Request) => Promise<Response>;
-
-  // Optional — only "pull" mode adapters implement this.
-  // The contract is enforced at runtime; here we gate statically.
-  next?(prefix: QueuePrefix): Promise<QueueDelivery | null>;
-
-  getDeploymentId?(): Promise<string>;
 }
+
+// Pull: runtime drives a fetch loop. SQS, Kafka, NATS JetStream.
+export interface QueuePull extends QueueCore {
+  readonly mode: "pull";
+  next(prefix: QueuePrefix): Promise<QueueDelivery | null>;
+}
+
+// Embedded: in-process dispatch, no HTTP loopback.
+export interface QueueEmbedded extends QueueCore {
+  readonly mode: "embedded";
+}
+
+// Discriminated union — the `mode` literal narrows at use sites.
+export type Queue = QueuePush | QueuePull | QueueEmbedded;
