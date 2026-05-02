@@ -1,5 +1,5 @@
 /**
- * `buildRuntimeWorkflow` — ONE generic openworkflow workflow that takes a
+ * `buildRuntimeWorkflow` - ONE generic openworkflow workflow that takes a
  * SerializedWorkflow as input and walks it. The @thodare/api uses
  * this so it can register new workflows AFTER `worker.start()` without
  * needing a worker restart per workflow create.
@@ -15,10 +15,11 @@
 
 import type { OpenWorkflow } from "@thodare/openworkflow";
 import type { Backend } from "@thodare/openworkflow/internal";
+import type { ResolvedCredential } from "../credentials/types.js";
 import type { BlockRegistry } from "../blocks/registry.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { SerializedWorkflow } from "../types.js";
-import { walkWorkflow } from "./walk.js";
+import { walkWorkflow } from "./walk.js"; 
 import { createDurableHandle, type DurableHandle } from "./handle.js";
 
 export interface BuildRuntimeWorkflowOptions {
@@ -29,12 +30,14 @@ export interface BuildRuntimeWorkflowOptions {
   env?: Record<string, string>;
   /** Override the workflow name. Default: "wfkit-runtime". */
   name?: string;
+  /** Resolve a credential by id. Called per-block during walk when credentialId is present in params. */
+  resolveCredential?: (credentialId: string, organizationId: string) => Promise<ResolvedCredential | null>;
 }
 
 export interface RuntimeWorkflow {
   /** Run the runtime against a workflow JSON + input. Returns DurableHandle. */
   run: (
-    args: { workflow: SerializedWorkflow; input?: unknown },
+    args: { workflow: SerializedWorkflow; input?: unknown; organizationId?: string },
     options?: { idempotencyKey?: string; defaultTimeoutMs?: number; pollIntervalMs?: number },
   ) => Promise<DurableHandle>;
   /** Reattach to an existing run by id. */
@@ -53,9 +56,10 @@ export function buildRuntimeWorkflow(opts: BuildRuntimeWorkflowOptions): Runtime
   const compiled = opts.ow.defineWorkflow(
     { name: opts.name ?? DEFAULT_RUNTIME_NAME },
     async ({ input, step }) => {
-      const { workflow, input: trigger } = (input as {
+      const { workflow, input: trigger, organizationId } = (input as {
         workflow: SerializedWorkflow;
         input?: unknown;
+        organizationId?: string;
       });
       if (!workflow) {
         throw new Error("wfkit-runtime: input.workflow is required");
@@ -67,6 +71,8 @@ export function buildRuntimeWorkflow(opts: BuildRuntimeWorkflowOptions): Runtime
         blockRegistry: opts.blockRegistry,
         toolRegistry: opts.toolRegistry,
         env,
+        ...(opts.resolveCredential ? { resolveCredential: opts.resolveCredential } : {}),
+        ...(organizationId ? { organizationId } : {}),
       });
     },
   );

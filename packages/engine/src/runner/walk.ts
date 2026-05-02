@@ -21,6 +21,7 @@ import {
   VarsResolver,
 } from "../executor/resolver.js";
 import { buildDAG, topoSort } from "../executor/dag.js";
+import type { ResolvedCredential } from "../credentials/types.js";
 import type {
   PauseInfo,
   SerializedBlock,
@@ -38,6 +39,9 @@ export interface WalkOptions {
   blockRegistry: BlockRegistry;
   toolRegistry: ToolRegistry;
   env: Record<string, string>;
+  /** Resolve a credential by id. Called when a block's params include credentialId. */
+  resolveCredential?: (credentialId: string, organizationId: string) => Promise<ResolvedCredential | null>;
+  organizationId?: string;
 }
 
 export async function walkWorkflow(
@@ -102,11 +106,36 @@ export async function walkWorkflow(
       ? def.tools.config.params(resolvedParams)
       : resolvedParams;
 
+    let credential: ResolvedCredential | undefined;
+    if (opts.resolveCredential && opts.organizationId) {
+      const credentialId = toolParams["credentialId"] as string | undefined;
+      if (credentialId !== undefined) {
+        const resolved = await opts.resolveCredential(credentialId, opts.organizationId);
+        if (!resolved) {
+          throw new Error(
+            `credential_not_found: credential '${credentialId}' not found for block ${block.id}`,
+          );
+        }
+        if (def.tools) {
+          const toolId = def.tools.config.tool(resolvedParams);
+          const resolvedTool = toolRegistry.get(toolId);
+          if (resolvedTool?.credential && resolvedTool.credential.type !== resolved.type) {
+            throw new Error(
+              `credential_type_mismatch: block ${block.id} expects credential type '${resolvedTool.credential.type}', got '${resolved.type}'`,
+            );
+          }
+        }
+        credential = resolved;
+        delete toolParams["credentialId"];
+      }
+    }
+
     const ctx: ToolContext = {
       env,
       executionId: blockId,
       blockId,
       log: () => {},
+      ...(credential ? { credential } : {}),
     };
 
     const out = await step.run({ name: stepName(block, "run") }, async () =>

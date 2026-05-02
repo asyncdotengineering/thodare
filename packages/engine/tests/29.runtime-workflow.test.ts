@@ -158,4 +158,58 @@ describe("buildRuntimeWorkflow", () => {
     expect(firstCalls).toBe(1);
     expect(secondCalls).toBeGreaterThanOrEqual(2);
   });
+
+  it("resolves credentialId from block params and injects into ToolContext.credential", async () => {
+    h = await newDurableHarness();
+    const { tools, blocks } = freshRegistries();
+
+    let capturedCredential: unknown = undefined;
+    const conn = defineConnector({
+      type: "rt-cred",
+      credential: { required: true, type: "api-key" },
+      params: z.object({ msg: z.string() }),
+      outputs: z.object({ hasCred: z.boolean(), keyLen: z.number() }),
+      async run(_params, ctx) {
+        capturedCredential = ctx.credential;
+        return {
+          hasCred: ctx.credential !== undefined,
+          keyLen: typeof ctx.credential?.secret === "object" ? Object.keys(ctx.credential.secret).length : 0,
+        };
+      },
+    });
+    tools.register(conn.tool);
+    blocks.register(conn.block);
+
+    let resolveCalls = 0;
+    const runtime = buildRuntimeWorkflow({
+      ow: h.ow,
+      backend: h.backend,
+      blockRegistry: blocks,
+      toolRegistry: tools,
+      resolveCredential: async (credentialId, organizationId) => {
+        resolveCalls += 1;
+        if (credentialId === "cred-abc" && organizationId === "org-1") {
+          return { id: "cred-abc", type: "api-key", displayName: "Test Key", secret: { apiKey: "sk-test-12345" } };
+        }
+        return null;
+      },
+    });
+
+    const wf = {
+      version: "1.0.0",
+      blocks: [
+        { id: "e", type: "rt-cred", enabled: true, params: { msg: "hello", credentialId: "cred-abc" } },
+      ],
+      connections: [],
+    };
+
+    await h.startWorker();
+    const handle = await runtime.run({ workflow: wf, input: {}, organizationId: "org-1" });
+    const out = (await handle.result()) as { outputs: Record<string, unknown> };
+    const result = out.outputs["e"] as { hasCred: boolean; keyLen: number };
+    expect(result.hasCred).toBe(true);
+    expect(result.keyLen).toBeGreaterThan(0);
+    expect(resolveCalls).toBe(1);
+    expect(capturedCredential).toBeDefined();
+  });
 });

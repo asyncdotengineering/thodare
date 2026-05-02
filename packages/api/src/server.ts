@@ -19,6 +19,8 @@ import { createSchedulesRouter, createAdminRouter } from "./routes/schedules.js"
 import { createWebhooksController, type WebhooksController } from "./routes/webhooks.js";
 import { createRuntimeHost } from "./runtime-host.js";
 import { createScheduleStore, type ScheduleStore } from "./store/schedules.js";
+import { createCredentialsStore, type CredentialStore } from "./store/credentials.js";
+import { createCredentialsRouter } from "./routes/credentials.js";
 import { authGuard, type AuthVariables } from "./middleware/session.js";
 import { tokenBucketRateLimit } from "./middleware/rate-limit.js";
 import { createAuth, runAuthMigrations, type Auth } from "./auth.js";
@@ -39,12 +41,16 @@ export interface CreateControlPlaneApiOptions {
   versionLabel?: string;
   /** Set true in production over HTTPS to enable Secure cookies. */
   trustHost?: boolean;
+  /** 32-byte master key for credential encryption. If unset, reads THODARE_CREDENTIALS_MASTER_KEY env var (base64). */
+  credentialsMasterKey?: Uint8Array;
 }
 
 export interface ControlPlaneApi {
   app: Hono<{ Variables: AuthVariables }>;
   store: WorkflowStore;
   schedules: ScheduleStore;
+  credentials: CredentialStore;
+  credentialsMasterKey: Uint8Array | undefined;
   webhooks: WebhooksController;
   auth: Auth;
   authPool: Pool;
@@ -56,12 +62,34 @@ const HEALTH_PATH = "/health";
 export async function createControlPlaneApi(
   opts: CreateControlPlaneApiOptions,
 ): Promise<ControlPlaneApi> {
-  // 0. Make sure the schema exists; both better-auth and our stores write
+  // 0. Resolve the credentials master key. Both the programmatic
+  // (`opts.credentialsMasterKey`) and env (`THODARE_CREDENTIALS_MASTER_KEY`)
+  // paths are length-validated; an invalid key fails fast at boot rather
+  // than silently producing weak ciphertexts at first use.
+  let masterKey: Uint8Array | undefined = opts.credentialsMasterKey;
+  if (masterKey && masterKey.length !== 32) {
+    throw new Error(
+      `opts.credentialsMasterKey must be exactly 32 bytes, got ${masterKey.length}`,
+    );
+  }
+  if (!masterKey && process.env["THODARE_CREDENTIALS_MASTER_KEY"]) {
+    const buf = Buffer.from(process.env["THODARE_CREDENTIALS_MASTER_KEY"]!, "base64");
+    if (buf.length !== 32) {
+      throw new Error(
+        `THODARE_CREDENTIALS_MASTER_KEY must decode to 32 bytes, got ${buf.length}`,
+      );
+    }
+    masterKey = new Uint8Array(buf);
+  }
+
+  // 1. Make sure the schema exists; both better-auth and our stores write
   // into it.
   const store = createWorkflowStore({ pgUrl: opts.pgUrl, schema: opts.schema });
   await store.init();
   const schedules = createScheduleStore({ pgUrl: opts.pgUrl, schema: opts.schema });
   await schedules.init();
+  const credentials = createCredentialsStore({ pgUrl: opts.pgUrl, schema: opts.schema });
+  await credentials.init();
 
   // 1. Boot better-auth and run its migrations into the same schema.
   const { auth, pool: authPool } = createAuth({
@@ -112,13 +140,21 @@ export async function createControlPlaneApi(
   }));
 
   // Build the runtime host BEFORE the worker starts.
-  const runtimeHost = createRuntimeHost({ wfkit: opts.wfkit });
+  const runtimeHost = createRuntimeHost({
+    wfkit: opts.wfkit,
+    credentialStore: credentials,
+    ...(masterKey ? { masterKey } : {}),
+  });
 
   app.route("/api/workflows", createWorkflowsRouter({ store, wfkit: opts.wfkit, runtimeHost }));
   app.route("/api/connectors", createConnectorsRouter({ wfkit: opts.wfkit }));
   app.route("/api/runs", createRunsRouter({ wfkit: opts.wfkit, runtimeHost }));
   app.route("/api/schedules", createSchedulesRouter({ store: schedules, workflows: store }));
   app.route("/api/admin", createAdminRouter({ schedules, workflows: store, runtimeHost }));
+
+  if (masterKey) {
+    app.route("/api/credentials", createCredentialsRouter({ store: credentials, masterKey }));
+  }
 
   const webhooks = createWebhooksController({ wfkit: opts.wfkit });
   app.route("/api/webhooks", webhooks.app);
@@ -127,12 +163,15 @@ export async function createControlPlaneApi(
     app,
     store,
     schedules,
+    credentials,
+    credentialsMasterKey: masterKey,
     webhooks,
     auth,
     authPool,
     async dispose() {
       await store.dispose();
       await schedules.dispose();
+      await credentials.dispose();
       try { await authPool.end(); } catch {}
     },
   };

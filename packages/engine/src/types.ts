@@ -13,6 +13,7 @@
  */
 
 import { z } from "zod";
+import type { ResolvedCredential, ToolCredentialBinding } from "./credentials/types.js";
 
 /* ───────────────────────  Visibility & primitives  ─────────────────────── */
 
@@ -45,6 +46,9 @@ export interface ToolContext {
    * for waits to derive a stable durable-step name. */
   blockId: string;
   log: (level: "info" | "warn" | "error", msg: string, meta?: unknown) => void;
+  /** Resolved credential, present only when the connector declares credential.required: true
+   * and a credentialId was in the block params at dispatch time. */
+  credential?: ResolvedCredential;
 }
 
 export interface Tool<TParams = any, TOut = any> {
@@ -53,6 +57,7 @@ export interface Tool<TParams = any, TOut = any> {
   description: string;
   params: Record<string, ToolParamDef>;
   outputs: Record<string, ToolOutputDef>;
+  credential?: ToolCredentialBinding;
   execute: (params: TParams, ctx: ToolContext) => Promise<TOut>;
 }
 

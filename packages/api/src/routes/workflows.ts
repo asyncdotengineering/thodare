@@ -147,7 +147,10 @@ export function createWorkflowsRouter(opts: {
       const result = await opts.runtimeHost.dispatch(
         row.workflow,
         body.input ?? {},
-        body.idempotencyKey ? { idempotencyKey: body.idempotencyKey } : undefined,
+        {
+          organizationId: orgId,
+          ...(body.idempotencyKey ? { idempotencyKey: body.idempotencyKey } : {}),
+        },
       );
       return c.json(result, 202);
     } catch (e: unknown) {

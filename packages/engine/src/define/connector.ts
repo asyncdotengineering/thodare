@@ -24,6 +24,7 @@ import type {
   ToolOutputDef,
   ToolParamDef,
 } from "../types.js";
+import type { ToolCredentialBinding } from "../credentials/types.js";
 import { readVisibility } from "./visibility.js";
 
 export interface DefineConnectorOptions<
@@ -44,6 +45,9 @@ export interface DefineConnectorOptions<
   params: P;
   /** Zod schema for outputs. Properties become declared block outputs. */
   outputs: O;
+  /** Declare a credential binding. When set, the runtime injects ctx.credential
+   * at execute time if the block params include a credentialId. */
+  credential?: ToolCredentialBinding;
   /** The actual implementation. Fully typed: `params` is `z.infer<P>`. */
   run: (params: z.infer<P>, ctx: ToolContext) => Promise<z.infer<O>>;
 }
@@ -97,6 +101,7 @@ export function defineConnector<
     description,
     params,
     outputs,
+    ...(opts.credential ? { credential: opts.credential } : {}),
     async execute(rawParams, ctx) {
       // Validate at the boundary. Surface a structured error if the
       // workflow JSON disagrees with the connector's declared schema.

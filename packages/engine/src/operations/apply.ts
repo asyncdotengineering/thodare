@@ -288,9 +288,22 @@ function filterParams(
     }
   }
 
+  // Determine if any of this block's tools declare a credential binding.
+  // If so, credentialId is a system-level param the LLM is allowed to set.
+  let allowsCredentialId = false;
+  for (const tid of block.tools.access) {
+    const tool = toolReg.get(tid);
+    if (tool?.credential) {
+      allowsCredentialId = true;
+      break;
+    }
+  }
+
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
     if (allowedSubBlockIds.has(k) || llmAllowedToolParams.has(k)) {
+      out[k] = v;
+    } else if (k === "credentialId" && allowsCredentialId) {
       out[k] = v;
     } else {
       fieldErrors.push({

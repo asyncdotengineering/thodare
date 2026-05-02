@@ -58,6 +58,8 @@ export interface NewApiHarnessOptions {
   skipStartWorker?: boolean;
   /** Skip auto-bootstrap of user+org+key. Default: false. */
   skipBootstrap?: boolean;
+  /** 32-byte master key for credential encryption. Required for credential tests. */
+  credentialsMasterKey?: Uint8Array;
 }
 
 let tmpDirs: string[] = [];
@@ -164,6 +166,7 @@ export async function newApiHarness(opts: NewApiHarnessOptions = {}): Promise<Ap
     baseURL: BASE_URL,
     authSecret: AUTH_SECRET,
     rateLimitPerMin: opts.rateLimitPerMin ?? 1000,
+    ...(opts.credentialsMasterKey ? { credentialsMasterKey: opts.credentialsMasterKey } : {}),
   });
 
   if (!opts.skipStartWorker) {

@@ -44,6 +44,10 @@ export { buildRuntimeWorkflow } from "./runner/runtime-workflow.js";
 export type { BuildRuntimeWorkflowOptions, RuntimeWorkflow } from "./runner/runtime-workflow.js";
 export { hidden, userOnly, userOrLlm } from "./define/visibility.js";
 
+// ── Credentials ──
+export type { CredentialType, ToolCredentialBinding, ResolvedCredential } from "./credentials/index.js";
+export { deriveOrgKey, encryptSecret, decryptSecret, packEncrypted, unpackEncrypted } from "./credentials/index.js";
+
 // ── Types ──
 export * from "./types.js";
 export { ToolRegistry } from "./tools/registry.js";
