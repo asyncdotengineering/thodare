@@ -52,7 +52,7 @@ sign-off.
 
 - **T1.** Connector-shaped DSL: Block↔Tool split, `visibility` flag,
   declared output schemas, `kind: "wait"` blocks for durable pauses,
-  `EditOp` patches with five operations (`add` / `update` / `remove`
+  `EditOp` patches with five operations (`add` / `edit` / `delete`
   / `connect` / `disconnect`). Patterns originally pioneered by Sim
   Studio; reimplemented in TypeScript with Zod-driven validation.
 - **T2.** **Skip-don't-reject** on `POST /api/workflows/:id/operations`.
