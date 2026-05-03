@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@thodare/backend": "workspace:*",
+    "@thodare/backend-openworkflow-shared": "workspace:*",
     "@thodare/openworkflow": "workspace:*",
     "postgres": "^3.4.9"
   },

@@ -1,20 +1,26 @@
-import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { BackendPostgres } from "@thodare/openworkflow/postgres";
 import { OpenWorkflow, Worker } from "@thodare/openworkflow";
 
-// ── Derived types (from public OpenWorkflow surface, not internal.ts) ──
-// OpenWorkflow.implementWorkflow reveals WorkflowSpec, WorkflowFunction.
-type _OwImplFn = OpenWorkflow["implementWorkflow"];
-type _OwImplParams = Parameters<_OwImplFn>;
-type OwWorkflowSpec = _OwImplParams[0];
-type OwWorkflowFunction = _OwImplParams[1];
-// WorkflowFunctionParams and StepApi derived from WorkflowFunction.
-type OwWorkflowFunctionParams = Parameters<OwWorkflowFunction>[0];
-type OwStepApi = OwWorkflowFunctionParams["step"];
-// StepWaitTimeout extracted from StepApi.waitForSignal options.
-type _WaitForSignalOpts = Parameters<OwStepApi["waitForSignal"]>[0];
-type StepWaitTimeout = NonNullable<_WaitForSignalOpts["timeout"]>;
+// ── Shared (extracted) ──
+import {
+  CAPABILITIES,
+  type OwWorkflowSpec,
+  type OwWorkflowFunction,
+  type OwWorkflowFunctionParams,
+  type SharedStepHost,
+  StepImpl,
+  makeId,
+  isoNow,
+  notImplemented,
+  resolveErrorMessage,
+  mapOwRunStatus,
+  mapOwStepStatus,
+  mapRunStatusToOw,
+  createLogger,
+} from "@thodare/backend-openworkflow-shared";
+
+// ── Backend contract types ──
 import type {
   RunId,
   StepId,
@@ -32,9 +38,6 @@ import type {
   StreamInfo,
   ThodareHandler,
   ThodareCtx,
-  ThodareStep,
-  ThodareLogger,
-  SleepUntilLocalTimeOpts,
   WorkflowSpec,
   RegisteredWorkflow,
   RunHandle,
@@ -45,31 +48,7 @@ import type {
   QueueOptions,
   HookId,
 } from "@thodare/backend";
-import type { BackendCapabilities } from "@thodare/backend";
 import { SPEC_VERSION_CURRENT } from "@thodare/backend";
-
-// ── Capabilities ──
-
-const CAPABILITIES: BackendCapabilities = {
-  maxStepDurationMs: 1_800_000,
-  maxRunDurationMs: Number.MAX_SAFE_INTEGER,
-  signalPrecision: "exact",
-  exactlyOnceSteps: true,
-  serverless: false,
-  pricingModel: "self-host",
-
-  supportsLiveSubscription: false,
-  supportsStepIOInspection: true,
-  supportsResumeFromStep: false,
-  supportsRecover: false,
-  liveSubscriptionLatencyMs: 0,
-
-  supportsRemovedTombstone: false,
-
-  supportsContainerBlocks: false,
-  supportsDynamicSchemas: false,
-  supportsAwaitFirstBlockResult: false,
-};
 
 // ── Events DDL ──
 
@@ -94,30 +73,6 @@ export interface CreateBackendOpenworkflowPgOptions {
   pgUrl: string;
   schema?: string;
   namespaceId?: string;
-}
-
-// ── Helpers ──
-
-function makeId(): string {
-  return randomUUID();
-}
-
-function isoNow(): string {
-  return new Date().toISOString();
-}
-
-function notImplemented(method: string): never {
-  throw new Error(`${method}: not_implemented`);
-}
-
-function resolveSleepDuration(
-  duration: string | number | Date,
-): string {
-  if (typeof duration === "string") return duration;
-  if (typeof duration === "number") return `${duration}ms`;
-  const ms = duration.getTime() - Date.now();
-  if (ms <= 0) return "0ms";
-  return `${ms}ms`;
 }
 
 // ── Row types ──
@@ -215,160 +170,6 @@ function owStepRowToStep(row: OwStepAttemptRow): Step {
   return result;
 }
 
-function resolveErrorMessage(error: unknown): string | undefined {
-  if (error === null || error === undefined) return undefined;
-  if (typeof error === "string") return error;
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as Record<string, unknown>)["message"] === "string"
-  ) {
-    return (error as Record<string, unknown>)["message"] as string;
-  }
-  return JSON.stringify(error);
-}
-
-function mapOwRunStatus(s: string): Run["status"] {
-  if (s === "pending") return "pending";
-  if (s === "running" || s === "sleeping") return "running";
-  if (s === "completed" || s === "succeeded") return "completed";
-  if (s === "failed") return "failed";
-  if (s === "canceled") return "canceled";
-  return "pending";
-}
-
-function mapOwStepStatus(s: string): Step["status"] {
-  if (s === "running") return "running";
-  if (s === "completed") return "completed";
-  if (s === "failed") return "failed";
-  return "pending";
-}
-
-function mapRunStatusToOw(s: Run["status"]): string {
-  if (s === "pending") return "pending";
-  if (s === "running") return "running";
-  if (s === "completed") return "completed";
-  if (s === "failed") return "failed";
-  if (s === "canceled") return "canceled";
-  return "pending";
-}
-
-// ── ThodareStep (wraps openworkflow StepApi + writes events) ──
-
-class StepImpl implements ThodareStep {
-  private readonly adapter: BackendOpenworkflowPg;
-  private readonly runId: string;
-  private readonly owStep: OwStepApi;
-
-  constructor(
-    adapter: BackendOpenworkflowPg,
-    runId: string,
-    owStep: OwStepApi,
-  ) {
-    this.adapter = adapter;
-    this.runId = runId;
-    this.owStep = owStep;
-  }
-
-  async run<T>(name: string, fn: () => Promise<T>): Promise<T> {
-    const stepId = makeId();
-    await this.adapter.insertEventRow(
-      makeId(), "step_started", this.runId, stepId,
-      { type: "step_started", runId: this.runId, stepId, name, startedAt: isoNow() },
-    );
-
-    try {
-      const result = await this.owStep.run({ name }, fn);
-      await this.adapter.insertEventRow(
-        makeId(), "step_completed", this.runId, stepId,
-        { type: "step_completed", runId: this.runId, stepId, name, output: result, completedAt: isoNow() },
-      );
-      return result as T;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.adapter.insertEventRow(
-        makeId(), "step_failed", this.runId, stepId,
-        { type: "step_failed", runId: this.runId, stepId, name, error: message, failedAt: isoNow() },
-      );
-      throw error;
-    }
-  }
-
-  async sleep(
-    name: string,
-    duration: string | number | Date,
-  ): Promise<void> {
-    const durStr = resolveSleepDuration(duration);
-    const stepId = makeId();
-    await this.adapter.insertEventRow(
-      makeId(), "step_started", this.runId, stepId,
-      { type: "step_started", runId: this.runId, stepId, name, startedAt: isoNow() },
-    );
-
-    try {
-      // DurationString is a branded string; at runtime it's a plain string.
-      await this.owStep.sleep(name, durStr as string as Parameters<OwStepApi["sleep"]>[1]);
-      await this.adapter.insertEventRow(
-        makeId(), "step_completed", this.runId, stepId,
-        { type: "step_completed", runId: this.runId, stepId, name, completedAt: isoNow() },
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.adapter.insertEventRow(
-        makeId(), "step_failed", this.runId, stepId,
-        { type: "step_failed", runId: this.runId, stepId, name, error: message, failedAt: isoNow() },
-      );
-      throw error;
-    }
-  }
-
-  async sleepUntilLocalTime(
-    name: string,
-    opts: SleepUntilLocalTimeOpts,
-  ): Promise<void> {
-    const now = new Date();
-    const target = new Date(now);
-    target.setHours(opts.hour, opts.minute ?? 0, 0, 0);
-    if (target <= now) {
-      target.setDate(target.getDate() + 1);
-    }
-    const ms = target.getTime() - now.getTime();
-    await this.sleep(name, ms);
-  }
-
-  async waitForSignal<T>(opts: {
-    name: string;
-    signalName: string;
-    timeoutMs?: number;
-  }): Promise<T> {
-    const namespacedSignal = `${this.runId}:${opts.signalName}`;
-    const timeout: StepWaitTimeout | undefined = opts.timeoutMs;
-    const result = await this.owStep.waitForSignal<T>({
-      name: opts.name,
-      signal: namespacedSignal,
-      ...(timeout !== undefined ? { timeout } : {}),
-    });
-    return (result?.data ?? undefined) as T;
-  }
-
-  getWriter<T>(_channel?: string): WritableStreamDefaultWriter<T> {
-    const chunks: T[] = [];
-    return new WritableStream<T>({
-      write(chunk) {
-        chunks.push(chunk);
-      },
-    }).getWriter();
-  }
-}
-
-// ── Logger stub ──
-
-function createLogger(): ThodareLogger {
-  const noopFn = () => {};
-  return { debug: noopFn, info: noopFn, warn: noopFn, error: noopFn };
-}
-
 // ── SQL helpers (module-level for field init ordering) ──
 
 type SqlClient = ReturnType<typeof postgres>;
@@ -414,7 +215,7 @@ async function insertEventRow(
 
 // ── Adapter ──
 
-export class BackendOpenworkflowPg {
+export class BackendOpenworkflowPg implements SharedStepHost {
   readonly id = "openworkflow-pg";
   readonly capabilities = CAPABILITIES;
   readonly specVersion = SPEC_VERSION_CURRENT;
@@ -704,20 +505,16 @@ export class BackendOpenworkflowPg {
 
       try {
         const result = await handler(ctx);
-        await insertEventRow(
-          adapter.sql, adapter.schemaName,
+        await adapter.insertEventRow(
           makeId(), "run_completed", runId, null,
           { type: "run_completed", runId, output: result, completedAt: isoNow() },
-          adapter.namespaceId,
         );
         return result;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await insertEventRow(
-          adapter.sql, adapter.schemaName,
+        await adapter.insertEventRow(
           makeId(), "run_failed", runId, null,
           { type: "run_failed", runId, error: message, failedAt: isoNow() },
-          adapter.namespaceId,
         );
         throw error;
       }
@@ -753,11 +550,9 @@ export class BackendOpenworkflowPg {
 
     const runId = handle.workflowRun.id;
 
-    await insertEventRow(
-      this.sql, this.schemaName,
+    await this.insertEventRow(
       makeId(), "run_started", runId, null,
-      { type: "run_started", runId, workflowName: name, input: input as Record<string, unknown>["input"], startedAt: isoNow() } as Record<string, unknown>,
-      this.namespaceId,
+      { type: "run_started", runId, workflowName: name, input, startedAt: isoNow() },
     );
 
     return { runId: runId as RunId };
@@ -774,8 +569,7 @@ export class BackendOpenworkflowPg {
       ...(payload !== undefined ? { data: payload } as const : {}),
     } as Parameters<typeof this.ow.sendSignal>[0]);
 
-    await insertEventRow(
-      this.sql, this.schemaName,
+    await this.insertEventRow(
       makeId(), "signal_delivered", runId as string, null,
       {
         type: "signal_delivered",
@@ -784,7 +578,6 @@ export class BackendOpenworkflowPg {
         payload,
         deliveredAt: isoNow(),
       },
-      this.namespaceId,
     );
   }
 
@@ -801,14 +594,15 @@ export class BackendOpenworkflowPg {
   }
 
   /**
-   * Write an event to the events table. Public for use by StepImpl.
+   * Write an event to the events table. Public for use by StepImpl
+   * (via the SharedStepHost contract).
    */
   async insertEventRow(
     id: string,
     type: string,
     runId: string,
     stepId: string | null,
-    payload: unknown,
+    payload: object,
   ): Promise<void> {
     return insertEventRow(this.sql, this.schemaName, id, type, runId, stepId, payload, this.namespaceId);
   }

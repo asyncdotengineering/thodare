@@ -1,20 +1,25 @@
-import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { BackendSqlite } from "@thodare/openworkflow/sqlite";
 import { OpenWorkflow, Worker } from "@thodare/openworkflow";
 
-// ── Derived types (from public OpenWorkflow surface, not internal.ts) ──
-// OpenWorkflow.implementWorkflow reveals WorkflowSpec, WorkflowFunction.
-type _OwImplFn = OpenWorkflow["implementWorkflow"];
-type _OwImplParams = Parameters<_OwImplFn>;
-type OwWorkflowSpec = _OwImplParams[0];
-type OwWorkflowFunction = _OwImplParams[1];
-// WorkflowFunctionParams and StepApi derived from WorkflowFunction.
-type OwWorkflowFunctionParams = Parameters<OwWorkflowFunction>[0];
-type OwStepApi = OwWorkflowFunctionParams["step"];
-// StepWaitTimeout extracted from StepApi.waitForSignal options.
-type _WaitForSignalOpts = Parameters<OwStepApi["waitForSignal"]>[0];
-type StepWaitTimeout = NonNullable<_WaitForSignalOpts["timeout"]>;
+// ── Shared (extracted) ──
+import {
+  CAPABILITIES,
+  type OwWorkflowSpec,
+  type OwWorkflowFunction,
+  type OwWorkflowFunctionParams,
+  type SharedStepHost,
+  StepImpl,
+  makeId,
+  isoNow,
+  notImplemented,
+  mapOwRunStatus,
+  mapOwStepStatus,
+  mapRunStatusToOw,
+  createLogger,
+} from "@thodare/backend-openworkflow-shared";
+
+// ── Backend contract types ──
 import type {
   RunId,
   StepId,
@@ -32,9 +37,6 @@ import type {
   StreamInfo,
   ThodareHandler,
   ThodareCtx,
-  ThodareStep,
-  ThodareLogger,
-  SleepUntilLocalTimeOpts,
   WorkflowSpec,
   RegisteredWorkflow,
   RunHandle,
@@ -45,31 +47,7 @@ import type {
   QueueOptions,
   HookId,
 } from "@thodare/backend";
-import type { BackendCapabilities } from "@thodare/backend";
 import { SPEC_VERSION_CURRENT } from "@thodare/backend";
-
-// ── Capabilities ──
-
-const CAPABILITIES: BackendCapabilities = {
-  maxStepDurationMs: 1_800_000,
-  maxRunDurationMs: Number.MAX_SAFE_INTEGER,
-  signalPrecision: "exact",
-  exactlyOnceSteps: true,
-  serverless: false,
-  pricingModel: "self-host",
-
-  supportsLiveSubscription: false,
-  supportsStepIOInspection: true,
-  supportsResumeFromStep: false,
-  supportsRecover: false,
-  liveSubscriptionLatencyMs: 0,
-
-  supportsRemovedTombstone: false,
-
-  supportsContainerBlocks: false,
-  supportsDynamicSchemas: false,
-  supportsAwaitFirstBlockResult: false,
-};
 
 // ── Options ──
 
@@ -98,30 +76,6 @@ function newSqliteDb(path: string): SqliteDb {
     DatabaseSync: new (path: string) => SqliteDb;
   };
   return new NodeDatabase(path);
-}
-
-// ── Helpers ──
-
-function makeId(): string {
-  return randomUUID();
-}
-
-function isoNow(): string {
-  return new Date().toISOString();
-}
-
-function notImplemented(method: string): never {
-  throw new Error(`${method}: not_implemented`);
-}
-
-function resolveSleepDuration(
-  duration: string | number | Date,
-): string {
-  if (typeof duration === "string") return duration;
-  if (typeof duration === "number") return `${duration}ms`;
-  const ms = duration.getTime() - Date.now();
-  if (ms <= 0) return "0ms";
-  return `${ms}ms`;
 }
 
 // ── Events table management ──
@@ -242,126 +196,9 @@ function tryParse(v: string): unknown {
   }
 }
 
-function mapOwRunStatus(s: string): Run["status"] {
-  if (s === "pending") return "pending";
-  if (s === "running" || s === "sleeping") return "running";
-  if (s === "completed" || s === "succeeded") return "completed";
-  if (s === "failed") return "failed";
-  if (s === "canceled") return "canceled";
-  return "pending";
-}
-
-function mapOwStepStatus(s: string): Step["status"] {
-  if (s === "running") return "running";
-  if (s === "completed") return "completed";
-  if (s === "failed") return "failed";
-  return "pending";
-}
-
-function mapRunStatusToOw(s: Run["status"]): string {
-  if (s === "pending") return "pending";
-  if (s === "running") return "running";
-  if (s === "completed") return "completed";
-  if (s === "failed") return "failed";
-  if (s === "canceled") return "canceled";
-  return "pending";
-}
-
-// ── ThodareStep ──
-
-class StepImpl implements ThodareStep {
-  private readonly adapter: BackendOpenworkflowSqlite;
-  private readonly runId: string;
-  private readonly owStep: OwStepApi;
-
-  constructor(
-    adapter: BackendOpenworkflowSqlite,
-    runId: string,
-    owStep: OwStepApi,
-  ) {
-    this.adapter = adapter;
-    this.runId = runId;
-    this.owStep = owStep;
-  }
-
-  async run<T>(name: string, fn: () => Promise<T>): Promise<T> {
-    const stepId = makeId();
-    await this.adapter.insertEventRow(
-      makeId(), "step_started", this.runId, stepId,
-      { type: "step_started", runId: this.runId, stepId, name, startedAt: isoNow() },
-    );
-    try {
-      const result = await this.owStep.run({ name }, fn);
-      await this.adapter.insertEventRow(
-        makeId(), "step_completed", this.runId, stepId,
-        { type: "step_completed", runId: this.runId, stepId, name, output: result, completedAt: isoNow() },
-      );
-      return result as T;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.adapter.insertEventRow(
-        makeId(), "step_failed", this.runId, stepId,
-        { type: "step_failed", runId: this.runId, stepId, name, error: message, failedAt: isoNow() },
-      );
-      throw error;
-    }
-  }
-
-  async sleep(
-    name: string,
-    duration: string | number | Date,
-  ): Promise<void> {
-    const durStr = resolveSleepDuration(duration);
-    await this.owStep.sleep(name, durStr as string as Parameters<OwStepApi["sleep"]>[1]);
-  }
-
-  async sleepUntilLocalTime(
-    name: string,
-    opts: SleepUntilLocalTimeOpts,
-  ): Promise<void> {
-    const now = new Date();
-    const target = new Date(now);
-    target.setHours(opts.hour, opts.minute ?? 0, 0, 0);
-    if (target <= now) {
-      target.setDate(target.getDate() + 1);
-    }
-    const ms = target.getTime() - now.getTime();
-    await this.sleep(name, ms);
-  }
-
-  async waitForSignal<T>(opts: {
-    name: string;
-    signalName: string;
-    timeoutMs?: number;
-  }): Promise<T> {
-    const namespacedSignal = `${this.runId}:${opts.signalName}`;
-    const timeout: StepWaitTimeout | undefined = opts.timeoutMs;
-    const result = await this.owStep.waitForSignal<T>({
-      name: opts.name,
-      signal: namespacedSignal,
-      ...(timeout !== undefined ? { timeout } : {}),
-    });
-    return (result?.data ?? undefined) as T;
-  }
-
-  getWriter<T>(_channel?: string): WritableStreamDefaultWriter<T> {
-    const chunks: T[] = [];
-    return new WritableStream<T>({
-      write(chunk) {
-        chunks.push(chunk);
-      },
-    }).getWriter();
-  }
-}
-
-function createLogger(): ThodareLogger {
-  const noopFn = () => {};
-  return { debug: noopFn, info: noopFn, warn: noopFn, error: noopFn };
-}
-
 // ── Adapter ──
 
-export class BackendOpenworkflowSqlite {
+export class BackendOpenworkflowSqlite implements SharedStepHost {
   readonly id = "openworkflow-sqlite";
   readonly capabilities = CAPABILITIES;
   readonly specVersion = SPEC_VERSION_CURRENT;
@@ -732,7 +569,7 @@ export class BackendOpenworkflowSqlite {
     type: string,
     runId: string,
     stepId: string | null,
-    payload: unknown,
+    payload: object,
   ): Promise<void> {
     this.eventsDb.prepare(`
       INSERT INTO "events" (id, type, run_id, step_id, payload, organization_id, created_at)
