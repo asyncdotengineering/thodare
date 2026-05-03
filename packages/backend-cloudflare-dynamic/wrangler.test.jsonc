@@ -1,0 +1,13 @@
+{
+  "name": "backend-cloudflare-dynamic-tests",
+  "main": "tests/_worker.ts",
+  "compatibility_date": "2026-03-10",
+  "compatibility_flags": ["experimental"],
+  "d1_databases": [
+    {
+      "binding": "THODARE_DB",
+      "database_name": "thodare-test",
+      "database_id": "test-db"
+    }
+  ]
+}
