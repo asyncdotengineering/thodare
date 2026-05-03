@@ -51,16 +51,13 @@ The initial vendor preserves upstream verbatim apart from packaging:
 - **`README.md`** — preserved upstream's content, with a one-paragraph
   Thodare-context preface.
 
-No source-file changes from upstream apart from:
-
-- **`internal.ts`** (Phase 3, 2026-05-03) — added re-exports for
-  `WorkflowSpec`, `StepApi`, `WorkflowFunction`, `WorkflowFunctionParams`,
-  `StepFunctionConfig`, `StepWaitTimeout`, and `RetryPolicy` from
-  `core/workflow-function.ts` and `core/workflow-definition.ts`.
-  These types are needed by the `@thodare/backend-openworkflow-*`
-  adapter packages so they can implement the `ThodareBackend` interface
-  against the vendored OpenWorkflow without importing private source
-  files. No runtime behavior changes.
+No source-file changes from upstream.  All types previously re-exported
+from `internal.ts` for the `@thodare/backend-openworkflow-*` adapters
+(Phase 3, 2026-05-03) have been replaced with local type derivations
+from the public `OpenWorkflow` class surface in each adapter file
+(`Parameters<OpenWorkflow["implementWorkflow"]>` etc.).  The adapters
+no longer import anything from `@thodare/openworkflow/internal` beyond
+the pre-Phase-3 exports (`Backend`, `WorkflowRun`, `StepAttempt`, etc.).
 
 If we add further patches in the future, each will be documented here
 with a one-line summary and a link to the commit.
