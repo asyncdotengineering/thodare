@@ -125,6 +125,9 @@ importers:
       '@thodare/backend':
         specifier: workspace:*
         version: link:../backend
+      '@thodare/backend-openworkflow-shared':
+        specifier: workspace:*
+        version: link:../backend-openworkflow-shared
       '@thodare/openworkflow':
         specifier: workspace:*
         version: link:../openworkflow
@@ -145,11 +148,30 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.19.17)
 
+  packages/backend-openworkflow-shared:
+    dependencies:
+      '@thodare/backend':
+        specifier: workspace:*
+        version: link:../backend
+      '@thodare/openworkflow':
+        specifier: workspace:*
+        version: link:../openworkflow
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.5
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
   packages/backend-openworkflow-sqlite:
     dependencies:
       '@thodare/backend':
         specifier: workspace:*
         version: link:../backend
+      '@thodare/backend-openworkflow-shared':
+        specifier: workspace:*
+        version: link:../backend-openworkflow-shared
       '@thodare/openworkflow':
         specifier: workspace:*
         version: link:../openworkflow
