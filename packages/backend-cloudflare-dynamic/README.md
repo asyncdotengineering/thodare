@@ -14,14 +14,30 @@ does not extend openworkflow.
 - ✅ **Workflow definitions persisted** — `defineWorkflow` writes to D1.
 - ✅ **Idempotent run creation** — `runWorkflow` honors `opts.idempotencyKey`.
 - ✅ **Signal / cancel** — delegated to CF Workflows `instance.sendEvent` / `terminate`.
+- ✅ **Runtime walker** — `walkWorkflow` from `@thodare/engine` executes workflow JSON
+  inside CF Workflows. Step rows + lifecycle events written to D1 with `organization_id`.
+- ✅ **Live subscription** — `LogSession` Durable Object with WebSocket fan-out +
+  DO storage persistence. `BackendCapabilities.supportsLiveSubscription: true`.
+- ✅ **Step IO inspection** — `steps` table populated by cf-step-shim during walk.
+  `BackendCapabilities.supportsStepIOInspection: true`.
 - ✅ **Honest capability flags** — every flag matches what the code actually delivers.
-- ⚠️ **Workflow execution stubbed** — the runtime walker bundle that interprets
-  workflow JSON inside CF Workflows `run(event, step)` is queued for Phase 4.x.
-  Calling `runWorkflow` will create a CF Workflow instance, but on first
-  `step.do` the dispatcher's loader throws `not_implemented` and the run fails.
-  The persistence path works; the execution path does not.
-- ⚠️ **Streams** (`streams.*`) and `resumeFromStep` / `recover` throw
-  `not_implemented` — `BackendCapabilities` declares them `false`.
+- ✅ **Streams WebSocket fan-out** — RPC `push`/`getChunks` and a live
+  WebSocket subscriber (`fetch` upgrade) both tested in the workerd pool.
+- ⚠️ **DO is not org-scoped at the storage layer** — `LogSession` keys by
+  `runId` only and relies on the runId UUID being unguessable to prevent
+  cross-org reads. Other tables enforce T11 with explicit `organization_id`
+  filters; the DO is intentionally thinner. Sound for alpha; flagged for
+  Phase 5+ if a stricter security model is required.
+- ⚠️ **CF control-flow exception assumption is unverified against real CF
+  Workflows.** The `cf-step-shim` `try/catch` assumes CF's `step.do()` does
+  not surface engine-internal sleep/wait parking exceptions to the user
+  callback (per CF docs). Mock-tested only — flag if real-engine behavior
+  differs.
+- ⚠️ **WebSocket pattern is non-hibernation.** Uses `WebSocketPair` +
+  `ws.accept()`. Works correctly but limits scale vs the Workers
+  hibernation API. Acceptable for alpha.
+- ⚠️ **`resumeFromStep` / `recover`** throw `not_implemented` —
+  `BackendCapabilities` declares them `false`.
 
 ## Architecture
 
@@ -30,7 +46,8 @@ CF Workflows is the engine. The adapter is thin glue that:
 1. Persists Thodare's events / runs / steps / hooks in **D1** (CF's SQLite-shaped DB).
 2. Provides a **dispatcher factory** (`createCloudflareDispatcher`) the user
    composes into their own Cloudflare Worker.
-3. Implements `ThodareBackend` so frontends + contract tests can talk through
+3. Provides a **`LogSession` Durable Object** for live run streaming via WebSocket.
+4. Implements `ThodareBackend` so frontends + contract tests can talk through
    the same surface as PG / SQLite.
 
 ## Required bindings
@@ -47,25 +64,64 @@ The dispatcher Worker must declare these bindings in `wrangler.jsonc`:
   ],
   "workflows": [
     { "name": "thodare", "binding": "WORKFLOWS", "class_name": "ThodareWorkflow" }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "LOG_SESSION", "class_name": "LogSession" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_classes": ["LogSession"] }
   ]
 }
 ```
 
-## Quick start (storage + dispatcher wiring; execution is Phase 4.x)
+## LogSession Durable Object
+
+The `LogSession` DO provides per-run, multi-channel live streaming. Key properties:
+
+- **Keyed by `runId`.** One DO instance handles all channels for a single workflow run.
+- **WebSocket fan-out.** Subscribers connect via `GET /?channel=logs` with
+  `Upgrade: websocket`. Reconnecting clients receive buffered history from DO storage.
+- **RPC methods.** `push(channel, chunk)`, `getChunks(channel, since?)`,
+  `getInfo(channel, runId)`, `closeChannel(channel)`, `list(runId)`.
+- **DO storage persistence.** Chunks survive DO eviction; reconnecting subscribers
+  see the full history.
+
+The adapter's `streams.*` methods delegate to `LogSession` via
+`env.LOG_SESSION.idFromName(runId).get(LogSession).push(channel, chunk)`.
+
+Export `LogSession` from your Worker's main module so the DO is registered:
+
+```ts
+export { LogSession } from "@thodare/backend-cloudflare-dynamic";
+```
+
+## Quick start (full stack)
 
 ```ts
 // src/index.ts — your dispatcher Worker
+import { BlockRegistry, ToolRegistry } from "@thodare/engine/registry";
 import {
   createBackendCloudflareDynamic,
   createCloudflareDispatcher,
   DynamicWorkflowBinding,
+  LogSession,
 } from "@thodare/backend-cloudflare-dynamic";
 
 // Re-export required by @cloudflare/dynamic-workflows.
-export { DynamicWorkflowBinding };
+export { DynamicWorkflowBinding, LogSession };
+
+// Build registries with your connectors + tools.
+const blockRegistry = new BlockRegistry();
+const toolRegistry = new ToolRegistry();
+// ... register blocks and tools ...
 
 // Register as `class_name` in wrangler.jsonc [[workflows]].
-export const { ThodareWorkflow } = createCloudflareDispatcher();
+export const { ThodareWorkflow } = createCloudflareDispatcher({
+  blockRegistry,
+  toolRegistry,
+});
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -74,12 +130,19 @@ export default {
       organizationId: "org-123",
     });
 
-    // ✅ Persists workflow definition to D1.
+    // Persists workflow definition to D1.
     await backend.defineWorkflow({ name: "hello" }, async () => {});
 
-    // ⚠️ Creates a CF Workflow instance and writes a run row. On first
-    // step.do the runtime walker stub throws not_implemented (Phase 4.x).
+    // Creates a CF Workflow instance. The runtime walker executes the
+    // workflow JSON via @thodare/engine's walkWorkflow.
     const { runId } = await backend.runWorkflow("hello", { x: 1 });
+
+    // Stream logs live via LogSession DO.
+    await backend.streams.write("logs", runId, {
+      index: 0,
+      data: { message: "Workflow started" },
+      timestamp: new Date().toISOString(),
+    });
 
     return Response.json({ runId });
   },
@@ -98,11 +161,11 @@ export default {
 | `pricingModel` | `"per-invocation"` | |
 | `maxStepOutputBytes` | 1,048,576 (1 MiB) | CF docs |
 | `maxPersistedStateBytes` | 1,073,741,824 (1 GiB) | CF docs (paid tier) |
-| `supportsLiveSubscription` | `false` | DO + WS queued for Phase 4.x |
-| `supportsStepIOInspection` | `false` | No code path writes step rows in alpha |
+| `supportsLiveSubscription` | `true` | LogSession DO + WebSocket fan-out |
+| `supportsStepIOInspection` | `true` | cf-step-shim writes step rows to D1 |
 | `supportsResumeFromStep` | `false` | CF Workflows requires re-create |
 | `supportsRecover` | `false` | |
-| `liveSubscriptionLatencyMs` | 0 | n/a — see `supportsLiveSubscription` |
+| `liveSubscriptionLatencyMs` | 200 | DO + WS estimate per proposal §4.7 |
 | `supportsRemovedTombstone` | `false` | |
 | `supportsContainerBlocks` | `false` | |
 | `supportsDynamicSchemas` | `false` | |
@@ -118,7 +181,7 @@ export default {
 2. **Plaintext metadata envelope.** The `@cloudflare/dynamic-workflows`
    envelope is unsigned and persisted in `event.payload`. Tenant code can
    read it back via `instance.status()`. The adapter puts only
-   `{ workflowId, organizationId, workflowVersion }` in metadata — never
+   `{ workflowId, organizationId, workflowVersion, runId }` in metadata — never
    any `hidden()` param, never any credential.
 
 3. **Loader runs on every step resume.** Cloudflare's `dispatchWorkflow`
@@ -137,5 +200,5 @@ adapters is a one-line change in your Worker entry point.
 
 ## License
 
-MIT. Depends on `@cloudflare/dynamic-workflows` (MIT, © Dan Lapid 2026)
-and `@thodare/backend` (MIT).
+MIT. Depends on `@cloudflare/dynamic-workflows` (MIT, © Dan Lapid 2026),
+`@thodare/backend` (MIT), and `@thodare/engine` (MIT).

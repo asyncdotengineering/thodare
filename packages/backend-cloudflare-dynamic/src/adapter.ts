@@ -20,6 +20,7 @@ import type {
 import { CAPABILITIES } from "./capabilities.js";
 import { D1Storage } from "./d1-storage.js";
 import type { CFEnv } from "./types.js";
+import type { LogSession } from "./log-session.js";
 import { wrapWorkflowBinding } from "@cloudflare/dynamic-workflows";
 
 function makeId(): string {
@@ -79,38 +80,57 @@ export class BackendCloudflareDynamic implements BackendCore {
     this.steps = this.storage.steps;
     this.hooks = this.storage.hooks;
 
+    const logSessionDo = options.env.LOG_SESSION;
+
     this.streams = {
       write: async (
-        _channel: string,
-        _runId: RunId,
-        _chunk: StreamChunk,
+        channel: string,
+        runId: RunId,
+        chunk: StreamChunk,
       ): Promise<void> => {
-        notImplemented("streams.write");
+        const id = logSessionDo.idFromName(runId as string);
+        const stub = logSessionDo.get(id);
+        await (stub as unknown as LogSession).push(channel, chunk);
       },
-      close: async (_channel: string, _runId: RunId): Promise<void> => {
-        notImplemented("streams.close");
+
+      close: async (channel: string, runId: RunId): Promise<void> => {
+        const id = logSessionDo.idFromName(runId as string);
+        const stub = logSessionDo.get(id);
+        await (stub as unknown as LogSession).closeChannel(channel);
       },
+
       get: async (
-        _channel: string,
-        _runId: RunId,
+        channel: string,
+        runId: RunId,
       ): Promise<StreamInfo | null> => {
-        notImplemented("streams.get");
+        const id = logSessionDo.idFromName(runId as string);
+        const stub = logSessionDo.get(id);
+        return (stub as unknown as LogSession).getInfo(channel, runId);
       },
-      list: async (_runId: RunId): Promise<StreamInfo[]> => {
-        notImplemented("streams.list");
+
+      list: async (runId: RunId): Promise<StreamInfo[]> => {
+        const id = logSessionDo.idFromName(runId as string);
+        const stub = logSessionDo.get(id);
+        return (stub as unknown as LogSession).list(runId);
       },
+
       getChunks: async (
-        _channel: string,
-        _runId: RunId,
-        _since?: number,
+        channel: string,
+        runId: RunId,
+        since?: number,
       ): Promise<StreamChunk[]> => {
-        notImplemented("streams.getChunks");
+        const id = logSessionDo.idFromName(runId as string);
+        const stub = logSessionDo.get(id);
+        return (stub as unknown as LogSession).getChunks(channel, since);
       },
+
       getInfo: async (
-        _channel: string,
-        _runId: RunId,
+        channel: string,
+        runId: RunId,
       ): Promise<StreamInfo | null> => {
-        notImplemented("streams.getInfo");
+        const id = logSessionDo.idFromName(runId as string);
+        const stub = logSessionDo.get(id);
+        return (stub as unknown as LogSession).getInfo(channel, runId);
       },
     };
 
@@ -141,8 +161,6 @@ export class BackendCloudflareDynamic implements BackendCore {
     const version = spec.version ?? 1;
     const createdAt = isoNow();
 
-    // v1 alpha stores only metadata. The handler is not wired — the runtime
-    // walker bundle (Phase 4.x) will interpret the workflow JSON on each run.
     const definition = JSON.stringify({
       name: spec.name,
       version,
@@ -204,10 +222,6 @@ export class BackendCloudflareDynamic implements BackendCore {
     const runId = makeId();
     const startedAt = isoNow();
 
-    // Insert as "running" — D1 insert + CF create are not transactional, so
-    // a "pending" intermediate state would be observable forever if the
-    // status update after create() failed. Inserting as running matches
-    // the post-create reality if create() succeeds.
     await this.storage.insertRun({
       id: runId,
       workflowName: name,
@@ -224,6 +238,7 @@ export class BackendCloudflareDynamic implements BackendCore {
         workflowId: row.id,
         organizationId: this.orgId,
         workflowVersion: String(row.version),
+        runId,
       },
       { bindingName: "WORKFLOWS" },
     );
@@ -235,10 +250,6 @@ export class BackendCloudflareDynamic implements BackendCore {
       } as WorkflowInstanceCreateOptions<unknown>);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // Best-effort failure persistence. If this update itself throws we
-      // rethrow the original create() error — the run row will read as
-      // "running" with no completion event, which is observable as a stuck
-      // run by callers and recoverable by recover() (Phase 4.x).
       try {
         await this.storage.updateRunStatus(runId, "failed", {
           error: message,
@@ -271,9 +282,6 @@ export class BackendCloudflareDynamic implements BackendCore {
     signalName: string,
     payload?: unknown,
   ): Promise<void> {
-    // Per dynamic-workflows binding.ts:152-154, get(id) does NOT envelope
-    // metadata — call the underlying binding directly to avoid pointless
-    // round-tripping and misleading wrap.
     try {
       const instance = await this.env.WORKFLOWS.get(runId as string);
       await instance.sendEvent({

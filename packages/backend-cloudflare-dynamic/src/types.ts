@@ -1,4 +1,5 @@
 import type { DispatcherMetadata } from "@cloudflare/dynamic-workflows";
+import type { BlockRegistry, ToolRegistry } from "@thodare/engine/registry";
 
 // Required Worker bindings for the dispatcher + adapter.
 // These names are convention, not configuration: the user must declare them
@@ -6,12 +7,20 @@ import type { DispatcherMetadata } from "@cloudflare/dynamic-workflows";
 export interface CFEnv {
   WORKFLOWS: Workflow;
   THODARE_DB: D1Database;
+  LOG_SESSION: DurableObjectNamespace;
 }
 
 export interface CloudflareDispatcherOptions {
   // Override only if the user genuinely cannot use the convention name
   // (rare). Defaults to "THODARE_DB".
   d1BindingName?: string;
+  // Override the DO binding name. Defaults to "LOG_SESSION".
+  logSessionBindingName?: string;
+  // Required: block and tool registries for the runtime walker.
+  blockRegistry: BlockRegistry;
+  toolRegistry: ToolRegistry;
+  // Optional env vars passed to tool execution context.
+  envVars?: Record<string, string>;
 }
 
 export interface ThodareMetadata {

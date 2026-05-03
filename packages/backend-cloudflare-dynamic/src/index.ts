@@ -9,6 +9,7 @@ export { CAPABILITIES } from "./capabilities.js";
 export {
   createCloudflareDispatcher,
   DynamicWorkflowBinding,
+  _buildLoadRunner,
 } from "./dispatcher.js";
 export type { CloudflareDispatcherFactory } from "./dispatcher.js";
 
@@ -20,3 +21,5 @@ export type {
 export { isThodareMetadata } from "./types.js";
 
 export { D1Storage } from "./d1-storage.js";
+
+export { LogSession } from "./log-session.js";
