@@ -484,6 +484,12 @@ export class BackendOpenworkflowSqlite implements SharedStepHost {
         );
         return result;
       } catch (error) {
+        // SleepSignal is upstream control flow for parking the worker, not a
+        // genuine run failure. Let it propagate to the worker without
+        // emitting run_failed. Ref: packages/openworkflow/worker/execution.ts:60
+        if (error instanceof Error && error.name === "SleepSignal") {
+          throw error;
+        }
         const message = error instanceof Error ? error.message : String(error);
         await adapter.insertEventRow(
           makeId(), "run_failed", runId, null,

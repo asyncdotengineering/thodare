@@ -123,6 +123,13 @@ export function registerCoreSleepPrecision(backend: ThodareBackend): void {
       );
       expect(sleepFailed).toBeUndefined();
 
+      // No phantom run_failed from SleepSignal propagating to the bridge
+      const phantomRunFailed = events.find(
+        (e) => e.type === "run_failed"
+          && (e.payload as Record<string, unknown>)?.["error"] === "SleepSignal",
+      );
+      expect(phantomRunFailed).toBeUndefined();
+
       // Valid step_completed payload — matches StepCompletedEventSchema shape
       const sleepCompleted = events.find(
         (e) => e.type === "step_completed"
