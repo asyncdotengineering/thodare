@@ -1,0 +1,12 @@
+{
+  "extends": ["./tsconfig.json"],
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "outDir": "dist-test",
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers"]
+  },
+  "include": ["src/**/*", "tests/**/*"]
+}
