@@ -134,6 +134,8 @@ interface OwStepAttemptRow {
   workflowRunId: string;
   stepName: string;
   status: string;
+  output: unknown;
+  error: unknown;
   startedAt: string | null;
   createdAt: string;
   finishedAt: string | null;
@@ -189,6 +191,15 @@ function owStepRowToStep(row: OwStepAttemptRow): Step {
     status,
     startedAt: row.startedAt ?? row.createdAt,
   };
+  if (row.output !== null && row.output !== undefined) {
+    result.output = row.output;
+  }
+  if (row.error !== null && row.error !== undefined) {
+    const errMsg = resolveErrorMessage(row.error);
+    if (errMsg !== undefined) {
+      result.error = errMsg;
+    }
+  }
   if (status === "completed" && row.finishedAt !== null) {
     result.completedAt = row.finishedAt;
   }
@@ -325,10 +336,11 @@ class StepImpl implements ThodareStep {
     signalName: string;
     timeoutMs?: number;
   }): Promise<T> {
+    const namespacedSignal = `${this.runId}:${opts.signalName}`;
     const timeout: StepWaitTimeout | undefined = opts.timeoutMs;
     const result = await this.owStep.waitForSignal<T>({
       name: opts.name,
-      signal: opts.signalName,
+      signal: namespacedSignal,
       ...(timeout !== undefined ? { timeout } : {}),
     });
     return (result?.data ?? undefined) as T;
@@ -384,12 +396,13 @@ async function insertEventRow(
   runId: string,
   stepId: string | null,
   payload: unknown,
+  organizationId: string | null,
 ): Promise<void> {
   const table = eventsIdent(sql, schemaName);
   await sql`
     INSERT INTO ${table}
-      (id, type, run_id, step_id, payload, created_at)
-    VALUES (${id}, ${type}, ${runId}, ${stepId ?? null}, ${sql.json(payload as Parameters<typeof sql.json>[0])}, NOW())
+      (id, type, run_id, step_id, payload, organization_id, created_at)
+    VALUES (${id}, ${type}, ${runId}, ${stepId ?? null}, ${sql.json(payload as Parameters<typeof sql.json>[0])}, ${organizationId}, NOW())
   `;
 }
 
@@ -403,6 +416,7 @@ export class BackendOpenworkflowPg {
 
   private readonly sql: SqlClient;
   private readonly schemaName: string;
+  private readonly namespaceId: string;
   private readonly backend: BackendPostgres;
   private readonly ow: OpenWorkflow;
   private worker: Worker | null = null;
@@ -423,11 +437,13 @@ export class BackendOpenworkflowPg {
   private constructor(
     sql: SqlClient,
     schemaName: string,
+    namespaceId: string,
     backend: BackendPostgres,
     ow: OpenWorkflow,
   ) {
     this.sql = sql;
     this.schemaName = schemaName;
+    this.namespaceId = namespaceId;
     this.backend = backend;
     this.ow = ow;
 
@@ -438,6 +454,7 @@ export class BackendOpenworkflowPg {
       create: async (input: EventInput): Promise<EventResult> => {
         const eid = makeId();
         const createdAt = isoNow();
+        const organizationId = input.organizationId ?? s.namespaceId;
         const table = eventsIdent(s.sql, s.schemaName);
 
         const [row] = await s.sql<Array<Record<string, unknown>>>`
@@ -450,7 +467,7 @@ export class BackendOpenworkflowPg {
             ${input.stepId ?? null},
             ${s.sql.json(input.payload as Parameters<typeof s.sql.json>[0])},
             ${input.correlationId ?? null},
-            ${input.organizationId ?? null},
+            ${organizationId},
             ${createdAt}
           )
           RETURNING *
@@ -470,9 +487,7 @@ export class BackendOpenworkflowPg {
           if (input.correlationId !== undefined) {
             (evt as unknown as Record<string, unknown>)["correlationId"] = input.correlationId;
           }
-          if (input.organizationId !== undefined) {
-            (evt as unknown as Record<string, unknown>)["organizationId"] = input.organizationId;
-          }
+          (evt as unknown as Record<string, unknown>)["organizationId"] = organizationId;
           return { event: evt };
         }
 
@@ -482,14 +497,16 @@ export class BackendOpenworkflowPg {
       get: async (eventId: EventId): Promise<Event | null> => {
         const table = eventsIdent(s.sql, s.schemaName);
         const [row] = await s.sql<Array<Record<string, unknown>>>`
-          SELECT * FROM ${table} WHERE id = ${eventId as string} LIMIT 1
+          SELECT * FROM ${table}
+          WHERE organization_id = ${s.namespaceId} AND id = ${eventId as string}
+          LIMIT 1
         `;
         return row ? toEvent(row) : null;
       },
 
       list: async (filter: EventListFilter): Promise<Event[]> => {
         const table = eventsIdent(s.sql, s.schemaName);
-        let q = s.sql`SELECT * FROM ${table} WHERE 1=1`;
+        let q = s.sql`SELECT * FROM ${table} WHERE organization_id = ${s.namespaceId}`;
 
         if (filter.runId !== undefined) {
           q = s.sql`${q} AND run_id = ${filter.runId}`;
@@ -512,7 +529,8 @@ export class BackendOpenworkflowPg {
         const table = eventsIdent(s.sql, s.schemaName);
         const rows = await s.sql`
           SELECT * FROM ${table}
-          WHERE correlation_id = ${correlationId}
+          WHERE organization_id = ${s.namespaceId}
+          AND correlation_id = ${correlationId}
           ORDER BY created_at ASC
         `;
         if (!Array.isArray(rows)) return [];
@@ -525,14 +543,16 @@ export class BackendOpenworkflowPg {
       get: async (runId: RunId): Promise<Run | null> => {
         const table = runsIdent(s.sql, s.schemaName);
         const [row] = await s.sql`
-          SELECT * FROM ${table} WHERE id = ${runId as string} LIMIT 1
+          SELECT * FROM ${table}
+          WHERE namespace_id = ${s.namespaceId} AND id = ${runId as string}
+          LIMIT 1
         `;
         return row ? owRowToRun(row as OwWorkflowRunRow) : null;
       },
 
       list: async (filter: RunListFilter): Promise<Run[]> => {
         const table = runsIdent(s.sql, s.schemaName);
-        let q = s.sql`SELECT * FROM ${table} WHERE 1=1`;
+        let q = s.sql`SELECT * FROM ${table} WHERE namespace_id = ${s.namespaceId}`;
 
         if (filter.workflowName !== undefined) {
           q = s.sql`${q} AND workflow_name = ${filter.workflowName}`;
@@ -557,7 +577,9 @@ export class BackendOpenworkflowPg {
       get: async (stepId: StepId): Promise<Step | null> => {
         const table = stepsIdent(s.sql, s.schemaName);
         const [row] = await s.sql`
-          SELECT * FROM ${table} WHERE id = ${stepId as string} LIMIT 1
+          SELECT * FROM ${table}
+          WHERE namespace_id = ${s.namespaceId} AND id = ${stepId as string}
+          LIMIT 1
         `;
         return row ? owStepRowToStep(row as OwStepAttemptRow) : null;
       },
@@ -566,7 +588,8 @@ export class BackendOpenworkflowPg {
         const table = stepsIdent(s.sql, s.schemaName);
         const rows = await s.sql`
           SELECT * FROM ${table}
-          WHERE workflow_run_id = ${runId as string}
+          WHERE namespace_id = ${s.namespaceId}
+          AND workflow_run_id = ${runId as string}
           ORDER BY created_at ASC
         `;
         if (!Array.isArray(rows)) return [];
@@ -612,11 +635,11 @@ export class BackendOpenworkflowPg {
   ): Promise<BackendOpenworkflowPg> {
     const schemaName = opts.schema ?? "openworkflow";
 
+    const namespaceId = opts.namespaceId ?? "default";
+
     const backend = await BackendPostgres.connect(opts.pgUrl, {
       schema: schemaName,
-      ...(opts.namespaceId !== undefined
-        ? { namespaceId: opts.namespaceId }
-        : {}),
+      namespaceId,
     });
 
     const sql = postgres(opts.pgUrl, {
@@ -628,7 +651,7 @@ export class BackendOpenworkflowPg {
 
     const ow = new OpenWorkflow({ backend });
 
-    return new BackendOpenworkflowPg(sql, schemaName, backend, ow);
+    return new BackendOpenworkflowPg(sql, schemaName, namespaceId, backend, ow);
   }
 
   // ── Lifecycle ──
@@ -664,11 +687,12 @@ export class BackendOpenworkflowPg {
       const runId = params.run.id;
       const step = new StepImpl(adapter, runId, params.step);
 
+      const abortController = new AbortController();
       const ctx: ThodareCtx = {
         input: params.input,
         step,
         runId: runId as RunId,
-        signal: new AbortSignal(),
+        signal: abortController.signal,
         log: createLogger(),
       };
 
@@ -678,6 +702,7 @@ export class BackendOpenworkflowPg {
           adapter.sql, adapter.schemaName,
           makeId(), "run_completed", runId, null,
           { type: "run_completed", runId, output: result, completedAt: isoNow() },
+          adapter.namespaceId,
         );
         return result;
       } catch (error) {
@@ -686,6 +711,7 @@ export class BackendOpenworkflowPg {
           adapter.sql, adapter.schemaName,
           makeId(), "run_failed", runId, null,
           { type: "run_failed", runId, error: message, failedAt: isoNow() },
+          adapter.namespaceId,
         );
         throw error;
       }
@@ -725,6 +751,7 @@ export class BackendOpenworkflowPg {
       this.sql, this.schemaName,
       makeId(), "run_started", runId, null,
       { type: "run_started", runId, workflowName: name, input: input as Record<string, unknown>["input"], startedAt: isoNow() } as Record<string, unknown>,
+      this.namespaceId,
     );
 
     return { runId: runId as RunId };
@@ -735,8 +762,9 @@ export class BackendOpenworkflowPg {
     signalName: string,
     payload?: unknown,
   ): Promise<void> {
+    const namespacedSignal = `${runId as string}:${signalName}`;
     await this.ow.sendSignal({
-      signal: signalName,
+      signal: namespacedSignal,
       ...(payload !== undefined ? { data: payload } as const : {}),
     } as Parameters<typeof this.ow.sendSignal>[0]);
 
@@ -750,6 +778,7 @@ export class BackendOpenworkflowPg {
         payload,
         deliveredAt: isoNow(),
       },
+      this.namespaceId,
     );
   }
 
@@ -775,7 +804,7 @@ export class BackendOpenworkflowPg {
     stepId: string | null,
     payload: unknown,
   ): Promise<void> {
-    return insertEventRow(this.sql, this.schemaName, id, type, runId, stepId, payload);
+    return insertEventRow(this.sql, this.schemaName, id, type, runId, stepId, payload, this.namespaceId);
   }
 }
 

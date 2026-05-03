@@ -16,6 +16,16 @@ describe("adapter-specific: PG", () => {
       pgUrl: PG_URL,
       schema,
     });
+    // Define workflows before starting the worker — the worker snapshots
+    // the registry at start(). Workflows defined afterward are invisible
+    // to that worker instance.
+    await adapter.defineWorkflow(
+      { name: "step-io-inspect" },
+      async (ctx) => {
+        return await ctx.step.run("compute", async () => 99);
+      },
+    );
+    await adapter.start();
   });
 
   afterAll(async () => {
@@ -133,5 +143,79 @@ describe("adapter-specific: PG", () => {
     await expect(
       adapter.recover("fake-run" as never),
     ).rejects.toThrow("not_implemented");
+  });
+
+  it("steps.list returns output for completed steps after worker execution", async () => {
+    const handle = await adapter.runWorkflow("step-io-inspect", {});
+
+    // Poll until run completes
+    let run: { status: string } | null = null;
+    for (let i = 0; i < 50; i++) {
+      run = await adapter.runs.get(handle.runId);
+      if (run?.status === "completed" || run?.status === "failed") break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    expect(run?.status).toBe("completed");
+
+    const steps = await adapter.steps.list(handle.runId);
+    expect(steps.length).toBeGreaterThanOrEqual(1);
+    const computeStep = steps.find((s) => s.name === "compute");
+    expect(computeStep).toBeDefined();
+    expect(computeStep?.status).toBe("completed");
+    expect(computeStep?.output).toBe(99);
+  });
+
+  it("cross-namespace isolation: adapter B cannot see adapter A data", async () => {
+    const namespaceA = `ns-a-${Math.random().toString(36).slice(2, 6)}`;
+    const namespaceB = `ns-b-${Math.random().toString(36).slice(2, 6)}`;
+
+    const adapterA = await BackendOpenworkflowPg.connect({
+      pgUrl: PG_URL,
+      schema,
+      namespaceId: namespaceA,
+    });
+    await adapterA.defineWorkflow(
+      { name: "iso-test" },
+      async (ctx) => {
+        return await ctx.step.run("work", async () => "from-a");
+      },
+    );
+    await adapterA.start();
+
+    const adapterB = await BackendOpenworkflowPg.connect({
+      pgUrl: PG_URL,
+      schema,
+      namespaceId: namespaceB,
+    });
+    await adapterB.start();
+
+    try {
+      const handleA = await adapterA.runWorkflow("iso-test", {});
+
+      // Poll until completion
+      let aRun: { status: string } | null = null;
+      for (let i = 0; i < 50; i++) {
+        aRun = await adapterA.runs.get(handleA.runId);
+        if (aRun?.status === "completed" || aRun?.status === "failed") break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      expect(aRun?.status).toBe("completed");
+
+      // adapterB must not see adapterA's run
+      const runFromB = await adapterB.runs.get(handleA.runId);
+      expect(runFromB).toBeNull();
+
+      // adapterB must not see adapterA's events
+      const eventsFromB = await adapterB.events.list({ runId: handleA.runId });
+      expect(eventsFromB).toEqual([]);
+
+      // adapterB must not see adapterA's steps
+      const stepsFromB = await adapterB.steps.list(handleA.runId);
+      expect(stepsFromB).toEqual([]);
+    } finally {
+      await adapterA.close();
+      await adapterB.close();
+    }
   });
 });

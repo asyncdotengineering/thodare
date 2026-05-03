@@ -172,6 +172,8 @@ interface SqliteStepRow {
   workflow_run_id: string;
   step_name: string;
   status: string;
+  output: string | null;
+  error: string | null;
   started_at: string | null;
   created_at: string;
   finished_at: string | null;
@@ -211,6 +213,12 @@ function sqliteStepRowToStep(row: SqliteStepRow): Step {
     status,
     startedAt: row.started_at ?? row.created_at,
   };
+  if (row.output !== null) {
+    result.output = tryParse(row.output);
+  }
+  if (row.error !== null) {
+    result.error = row.error;
+  }
   if (status === "completed" && row.finished_at !== null) {
     result.completedAt = row.finished_at;
   }
@@ -320,10 +328,11 @@ class StepImpl implements ThodareStep {
     signalName: string;
     timeoutMs?: number;
   }): Promise<T> {
+    const namespacedSignal = `${this.runId}:${opts.signalName}`;
     const timeout: StepWaitTimeout | undefined = opts.timeoutMs;
     const result = await this.owStep.waitForSignal<T>({
       name: opts.name,
-      signal: opts.signalName,
+      signal: namespacedSignal,
       ...(timeout !== undefined ? { timeout } : {}),
     });
     return (result?.data ?? undefined) as T;
@@ -353,6 +362,7 @@ export class BackendOpenworkflowSqlite {
   readonly mode = "embedded" as const;
 
   private readonly eventsDb: SqliteDb;
+  private readonly namespaceId: string;
   private readonly backend: BackendSqlite;
   private readonly ow: OpenWorkflow;
   private readonly _dbPath: string;
@@ -373,11 +383,13 @@ export class BackendOpenworkflowSqlite {
   private constructor(
     dbPath: string,
     eventsDb: SqliteDb,
+    namespaceId: string,
     backend: BackendSqlite,
     ow: OpenWorkflow,
   ) {
     this._dbPath = dbPath;
     this.eventsDb = eventsDb;
+    this.namespaceId = namespaceId;
     this.backend = backend;
     this.ow = ow;
 
@@ -389,6 +401,7 @@ export class BackendOpenworkflowSqlite {
       create: async (input: EventInput): Promise<EventResult> => {
         const eid = makeId();
         const createdAt = isoNow();
+        const organizationId = input.organizationId ?? s.namespaceId;
         const payloadJson = JSON.stringify(input.payload);
 
         s.eventsDb.prepare(`
@@ -401,7 +414,7 @@ export class BackendOpenworkflowSqlite {
           input.stepId ?? null,
           payloadJson,
           input.correlationId ?? null,
-          input.organizationId ?? null,
+          organizationId,
           createdAt,
         );
 
@@ -418,22 +431,20 @@ export class BackendOpenworkflowSqlite {
         if (input.correlationId !== undefined) {
           (event as unknown as Record<string, unknown>)["correlationId"] = input.correlationId;
         }
-        if (input.organizationId !== undefined) {
-          (event as unknown as Record<string, unknown>)["organizationId"] = input.organizationId;
-        }
+        (event as unknown as Record<string, unknown>)["organizationId"] = organizationId;
         return { event };
       },
 
       get: async (eventId: EventId): Promise<Event | null> => {
         const row = s.eventsDb.prepare(
-          `SELECT * FROM "events" WHERE id = ? LIMIT 1`,
-        ).get(eventId as string);
+          `SELECT * FROM "events" WHERE organization_id = ? AND id = ? LIMIT 1`,
+        ).get(s.namespaceId, eventId as string);
         return row ? sqliteRowToEvent(row) : null;
       },
 
       list: async (filter: EventListFilter): Promise<Event[]> => {
-        let sql = `SELECT * FROM "events" WHERE 1=1`;
-        const params: unknown[] = [];
+        let sql = `SELECT * FROM "events" WHERE organization_id = ?`;
+        const params: unknown[] = [s.namespaceId];
 
         if (filter.runId !== undefined) {
           sql += ` AND run_id = ?`;
@@ -455,20 +466,19 @@ export class BackendOpenworkflowSqlite {
         correlationId: string,
       ): Promise<Event[]> => {
         const rows = s.eventsDb.prepare(
-          `SELECT * FROM "events" WHERE correlation_id = ? ORDER BY created_at ASC`,
-        ).all(correlationId);
+          `SELECT * FROM "events" WHERE organization_id = ? AND correlation_id = ? ORDER BY created_at ASC`,
+        ).all(s.namespaceId, correlationId);
         return rows.map(sqliteRowToEvent);
       },
     };
 
     this.runs = {
       get: async (runId: RunId): Promise<Run | null> => {
-        // Read from openworkflow's SQLite DB via a second connection
         const owDb = newSqliteDb(s._dbPath);
         try {
           const row = owDb.prepare(
-            `SELECT * FROM "workflow_runs" WHERE id = ? LIMIT 1`,
-          ).get(runId as string) as SqliteRunRow | undefined;
+            `SELECT * FROM "workflow_runs" WHERE namespace_id = ? AND id = ? LIMIT 1`,
+          ).get(s.namespaceId, runId as string) as SqliteRunRow | undefined;
           return row ? sqliteRunRowToRun(row) : null;
         } finally {
           owDb.close();
@@ -478,8 +488,8 @@ export class BackendOpenworkflowSqlite {
       list: async (filter: RunListFilter): Promise<Run[]> => {
         const owDb = newSqliteDb(s._dbPath);
         try {
-          let sql = `SELECT * FROM "workflow_runs" WHERE 1=1`;
-          const params: unknown[] = [];
+          let sql = `SELECT * FROM "workflow_runs" WHERE namespace_id = ?`;
+          const params: unknown[] = [s.namespaceId];
 
           if (filter.workflowName !== undefined) {
             sql += ` AND workflow_name = ?`;
@@ -507,8 +517,8 @@ export class BackendOpenworkflowSqlite {
         const owDb = newSqliteDb(s._dbPath);
         try {
           const row = owDb.prepare(
-            `SELECT * FROM "step_attempts" WHERE id = ? LIMIT 1`,
-          ).get(stepId as string) as SqliteStepRow | undefined;
+            `SELECT * FROM "step_attempts" WHERE namespace_id = ? AND id = ? LIMIT 1`,
+          ).get(s.namespaceId, stepId as string) as SqliteStepRow | undefined;
           return row ? sqliteStepRowToStep(row) : null;
         } finally {
           owDb.close();
@@ -519,8 +529,8 @@ export class BackendOpenworkflowSqlite {
         const owDb = newSqliteDb(s._dbPath);
         try {
           const rows = owDb.prepare(
-            `SELECT * FROM "step_attempts" WHERE workflow_run_id = ? ORDER BY created_at ASC`,
-          ).all(runId as string) as Array<Record<string, unknown>>;
+            `SELECT * FROM "step_attempts" WHERE namespace_id = ? AND workflow_run_id = ? ORDER BY created_at ASC`,
+          ).all(s.namespaceId, runId as string) as Array<Record<string, unknown>>;
           return rows.map((r) =>
             sqliteStepRowToStep(r as unknown as SqliteStepRow),
           );
@@ -570,18 +580,17 @@ export class BackendOpenworkflowSqlite {
     opts?: CreateBackendOpenworkflowSqliteOptions,
   ): BackendOpenworkflowSqlite {
     const dbPath = opts?.path ?? ":memory:";
+    const namespaceId = opts?.namespaceId ?? "default";
 
     const backend = BackendSqlite.connect(dbPath, {
-      ...(opts?.namespaceId !== undefined
-        ? { namespaceId: opts.namespaceId }
-        : {}),
+      namespaceId,
     });
 
     const eventsDb = newSqliteDb(dbPath);
 
     const ow = new OpenWorkflow({ backend });
 
-    return new BackendOpenworkflowSqlite(dbPath, eventsDb, backend, ow);
+    return new BackendOpenworkflowSqlite(dbPath, eventsDb, namespaceId, backend, ow);
   }
 
   async start(): Promise<void> {
@@ -613,11 +622,12 @@ export class BackendOpenworkflowSqlite {
       const runId = params.run.id;
       const step = new StepImpl(adapter, runId, params.step);
 
+      const abortController = new AbortController();
       const ctx: ThodareCtx = {
         input: params.input,
         step,
         runId: runId as RunId,
-        signal: new AbortSignal(),
+        signal: abortController.signal,
         log: createLogger(),
       };
 
@@ -681,8 +691,9 @@ export class BackendOpenworkflowSqlite {
     signalName: string,
     payload?: unknown,
   ): Promise<void> {
+    const namespacedSignal = `${runId as string}:${signalName}`;
     await this.ow.sendSignal({
-      signal: signalName,
+      signal: namespacedSignal,
       ...(payload !== undefined ? { data: payload } as const : {}),
     } as Parameters<typeof this.ow.sendSignal>[0]);
 
@@ -718,14 +729,15 @@ export class BackendOpenworkflowSqlite {
     payload: unknown,
   ): Promise<void> {
     this.eventsDb.prepare(`
-      INSERT INTO "events" (id, type, run_id, step_id, payload, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO "events" (id, type, run_id, step_id, payload, organization_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       type,
       runId,
       stepId ?? null,
       JSON.stringify(payload),
+      this.namespaceId,
       isoNow(),
     );
   }

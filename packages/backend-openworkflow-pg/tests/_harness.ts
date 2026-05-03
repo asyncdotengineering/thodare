@@ -21,6 +21,8 @@ export async function newHarness(): Promise<Harness> {
     schema,
   });
 
+  await adapter.start();
+
   return {
     backend: adapter,
     schema,

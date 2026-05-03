@@ -19,6 +19,8 @@ export async function newHarness(): Promise<Harness> {
     path: dbPath,
   });
 
+  await adapter.start();
+
   return {
     backend: adapter,
     dispose: async () => {
