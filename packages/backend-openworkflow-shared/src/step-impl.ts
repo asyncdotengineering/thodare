@@ -78,9 +78,15 @@ export class StepImpl implements ThodareStep {
       await this.owStep.sleep(name, durStr as string as Parameters<OwStepApi["sleep"]>[1]);
       await this.host.insertEventRow(
         makeId(), "step_completed", this.runId, stepId,
-        { type: "step_completed", runId: this.runId, stepId, name, completedAt: isoNow() },
+        { type: "step_completed", runId: this.runId, stepId, name, output: null, completedAt: isoNow() },
       );
     } catch (error) {
+      // SleepSignal is upstream control flow for parking the worker, not a
+      // genuine error. Do not emit step_failed for it.
+      // Ref: packages/openworkflow/worker/execution.ts:60 — class SleepSignal extends Error
+      if (error instanceof Error && error.name === "SleepSignal") {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
       await this.host.insertEventRow(
         makeId(), "step_failed", this.runId, stepId,

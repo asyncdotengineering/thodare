@@ -227,7 +227,6 @@ export class BackendOpenworkflowPg implements SharedStepHost {
   private readonly backend: BackendPostgres;
   private readonly ow: OpenWorkflow;
   private worker: Worker | null = null;
-  private started = false;
   private readonly specMap = new Map<
     string,
     { spec: OwWorkflowSpec }
@@ -464,10 +463,14 @@ export class BackendOpenworkflowPg implements SharedStepHost {
   // ── Lifecycle ──
 
   async start(): Promise<void> {
-    if (this.started) return;
+    // Restart the worker if already started, so newly registered
+    // workflows (via defineWorkflow) are visible to the worker.
+    if (this.worker) {
+      try { await this.worker.stop(); } catch { /* best-effort */ }
+      this.worker = null;
+    }
     this.worker = this.ow.newWorker({ concurrency: 4 });
     await this.worker.start();
-    this.started = true;
   }
 
   async close(): Promise<void> {
@@ -475,7 +478,6 @@ export class BackendOpenworkflowPg implements SharedStepHost {
       try { await this.worker.stop(); } catch { /* best-effort */ }
       this.worker = null;
     }
-    this.started = false;
     try { await this.backend.stop(); } catch { /* best-effort */ }
     try { await this.sql.end({ timeout: 5 }); } catch { /* best-effort */ }
   }

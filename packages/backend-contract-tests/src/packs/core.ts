@@ -93,6 +93,50 @@ export function registerCoreSleepPrecision(backend: ThodareBackend): void {
       const handle = await backend.runWorkflow("test-sleep", {});
       expect(handle.runId).toBeDefined();
     });
+
+    it("step.sleep emits schema-valid step_completed and no spurious step_failed", async () => {
+      await backend.defineWorkflow(
+        { name: "test-sleep-events" },
+        async (ctx) => {
+          await ctx.step.sleep("nap", 50);
+        },
+      );
+      // Restart the worker so it picks up the newly registered workflow
+      if (backend.start) await backend.start();
+      const handle = await backend.runWorkflow("test-sleep-events", {});
+
+      // Poll until the run reaches a terminal state (worker runs asynchronously)
+      let run: { status: string } | null = null;
+      for (let i = 0; i < 50; i++) {
+        run = await backend.runs.get(handle.runId);
+        if (run?.status === "completed" || run?.status === "failed") break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      expect(run?.status).toBe("completed");
+
+      const events = await backend.events.list({ runId: handle.runId });
+
+      // No false step_failed for the sleep step
+      const sleepFailed = events.find(
+        (e) => e.type === "step_failed"
+          && (e.payload as Record<string, unknown>)?.["name"] === "nap",
+      );
+      expect(sleepFailed).toBeUndefined();
+
+      // Valid step_completed payload — matches StepCompletedEventSchema shape
+      const sleepCompleted = events.find(
+        (e) => e.type === "step_completed"
+          && (e.payload as Record<string, unknown>)?.["name"] === "nap",
+      );
+      expect(sleepCompleted).toBeDefined();
+      const payload = sleepCompleted!.payload as Record<string, unknown>;
+      expect(payload["type"]).toBe("step_completed");
+      expect(typeof payload["runId"]).toBe("string");
+      expect(typeof payload["stepId"]).toBe("string");
+      expect(payload["name"]).toBe("nap");
+      expect(payload["output"]).toBeNull();
+      expect(typeof payload["completedAt"]).toBe("string");
+    });
   });
 }
 

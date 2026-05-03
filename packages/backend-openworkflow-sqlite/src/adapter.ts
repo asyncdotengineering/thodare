@@ -210,7 +210,6 @@ export class BackendOpenworkflowSqlite implements SharedStepHost {
   private readonly ow: OpenWorkflow;
   private readonly _dbPath: string;
   private worker: Worker | null = null;
-  private started = false;
   private readonly specMap = new Map<
     string,
     { spec: OwWorkflowSpec }
@@ -437,10 +436,14 @@ export class BackendOpenworkflowSqlite implements SharedStepHost {
   }
 
   async start(): Promise<void> {
-    if (this.started) return;
+    // Restart the worker if already started, so newly registered
+    // workflows (via defineWorkflow) are visible to the worker.
+    if (this.worker) {
+      try { await this.worker.stop(); } catch { /* best-effort */ }
+      this.worker = null;
+    }
     this.worker = this.ow.newWorker({ concurrency: 4 });
     await this.worker.start();
-    this.started = true;
   }
 
   async close(): Promise<void> {
@@ -448,7 +451,6 @@ export class BackendOpenworkflowSqlite implements SharedStepHost {
       try { await this.worker.stop(); } catch { /* best-effort */ }
       this.worker = null;
     }
-    this.started = false;
     try { this.eventsDb.close(); } catch { /* best-effort */ }
     try { await this.backend.stop(); } catch { /* best-effort */ }
   }
