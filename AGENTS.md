@@ -76,7 +76,7 @@ Every table has `organization_id`; every store method takes `organizationId`; ev
 
 ### Hidden params are a security boundary (T3)
 
-`hidden()` params on a connector NEVER appear in `GET /api/connectors`. The LLM cannot reference them in op `params`; if it tries, the op is skipped with `hidden_param_in_input`. Defense lives in `packages/engine/src/define/visibility.ts` and `packages/engine/src/operations/apply.ts`. Do not expose a connector's full Zod schema anywhere user-facing.
+`hidden()` params on a connector NEVER appear in `GET /api/connectors`. The LLM cannot reference them in op `params`; if it tries, the field is stripped from the resulting block before it lands in the workflow JSON and a structured `validation_errors[]` entry surfaces the rejection. The block itself still applies (T2 partial-validity). Defense lives in `packages/engine/src/define/visibility.ts` and `packages/engine/src/operations/apply.ts`. Do not expose a connector's full Zod schema anywhere user-facing.
 
 ### Auth model
 

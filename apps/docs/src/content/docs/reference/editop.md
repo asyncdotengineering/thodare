@@ -17,25 +17,31 @@ op is one of five shapes.
 }
 ```
 
-Skips: `block_type_not_registered`, `block_id_already_exists`,
-`block_disabled`, `hidden_param_in_input`.
+Skips: `block_already_exists`, `block_type_not_registered`,
+`tool_not_allowed`.
 
-## `update`
+Hidden params (e.g., a connector's `accessToken: hidden(...)`) are not
+a skip — the field is stripped from the resulting block and a
+`validation_errors[]` entry surfaces the rejection. The block still
+applies.
+
+## `edit`
 
 ```ts
 {
-  operation_type: "update",
+  operation_type: "edit",
   block_id: string,
   params: Record<string, unknown>,   // merged into existing
 }
 ```
 
-Skips: `block_not_found`, `hidden_param_in_input`.
+Skips: `block_not_found`. Hidden-param attempts surface as
+`validation_errors[]`, not skips (see above).
 
-## `remove`
+## `delete`
 
 ```ts
-{ operation_type: "remove", block_id: string }
+{ operation_type: "delete", block_id: string }
 ```
 
 Skips: `block_not_found`. Edges referencing the block are also removed.
@@ -74,7 +80,7 @@ Skips: `edge_not_found`.
 ```ts
 {
   reason_code: SkipReason,
-  operation_type: "add" | "update" | "remove" | "connect" | "disconnect",
+  operation_type: "add" | "edit" | "delete" | "connect" | "disconnect",
   block_id: string,
   reason: string,              // verbose
   details?: Record<string, unknown>,
@@ -92,6 +98,20 @@ Skips: `edge_not_found`.
 }
 ```
 
+`SkipReason` is one of:
+
+```
+block_not_found
+block_already_exists
+block_type_not_registered
+tool_not_allowed
+invalid_edge_target
+invalid_edge_source
+duplicate_connection
+edge_not_found
+cycle_introduced
+```
+
 Zod failures on params are caught structurally, not thrown. The block
 stays in the workflow with whatever params landed; subsequent
-`update` ops can correct the params. Partial validity > no progress.
+`edit` ops can correct the params. Partial validity > no progress.

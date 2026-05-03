@@ -280,7 +280,7 @@ await fetchAuthed("/api/workflows/incident-page/operations", {
 console.log("✓ Workflow ready. POST to /api/webhooks/incident to trigger.");
 ```
 
-The response carries `{ ok, version, validation_errors, skipped_items, summary }`. If the LLM (or the script) referenced a `hidden()` param the response would skip with `hidden_param_in_input`; if the credential id was wrong the response skips with `unknown_credential` (new skip reason). The whole batch never throws on a single bad op.
+The response carries `{ ok, version, validation_errors, skipped_items, summary }`. If the LLM (or the script) referenced a `hidden()` param the field is stripped from the resulting block and a `validation_errors[]` entry surfaces the rejection — the block still applies (T2 partial validity). If the workflow references an unknown credential id, the run-time walker fails the block with `credential_not_found` at dispatch time (Phase 5b will move this to validate-time as a new skip reason). The whole batch never throws on a single bad op.
 
 ### 2.6 Production observability
 
@@ -409,9 +409,9 @@ export async function buildWorkflowFromPrompt(prompt: string) {
     maxSteps: 10,           // up to 10 patch iterations
     system: `You are constructing a Thodare workflow.
 - Always call listConnectors + getConnector first.
-- Patch via patchWorkflow. Inspect skipped_items and fix.
-- A "hidden_param_in_input" skip means you tried to set a credential or secret directly — use credentialId reference instead.
-- Run only after the patch returns 0 skipped items.`,
+- Patch via patchWorkflow. Inspect skipped_items AND validation_errors and fix.
+- A validation_errors[] entry with field === "<some-name>" and error matching /not exposed by block/ means you tried to set a hidden param (credential / secret material) directly — use credentialId reference instead.
+- Run only after the patch returns 0 skipped items and 0 validation_errors.`,
     messages: [{ role: "user", content: prompt }],
   });
 
