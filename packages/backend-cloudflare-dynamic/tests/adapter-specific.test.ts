@@ -244,7 +244,97 @@ describe("T11 multi-tenant isolation: events / runs / steps / hooks", () => {
 });
 
 describe("capability honesty: backed by code", () => {
-  it("declares supportsStepIOInspection: false because no code writes step rows", () => {
-    expect(CAPABILITIES.supportsStepIOInspection).toBe(false);
+  it("declares supportsStepIOInspection: true because cf-step-shim writes step rows", () => {
+    expect(CAPABILITIES.supportsStepIOInspection).toBe(true);
+  });
+
+  it("declares supportsLiveSubscription: true because LogSession DO is wired", () => {
+    expect(CAPABILITIES.supportsLiveSubscription).toBe(true);
+  });
+
+  it("declares liveSubscriptionLatencyMs: 200 (DO + WS estimate)", () => {
+    expect(CAPABILITIES.liveSubscriptionLatencyMs).toBe(200);
+  });
+});
+
+describe("LogSession DO: streams integration", () => {
+  let env: CFEnv;
+
+  beforeAll(async () => {
+    env = await getEnv();
+    for (const stmt of ddlStatements()) {
+      await env.THODARE_DB.prepare(stmt).run();
+    }
+  });
+
+  it("LOG_SESSION binding is available and can resolve DO stubs", () => {
+    expect(env.LOG_SESSION).toBeDefined();
+    const doId = env.LOG_SESSION.idFromName("test-run");
+    expect(doId).toBeDefined();
+    const stub = env.LOG_SESSION.get(doId);
+    expect(stub).toBeDefined();
+  });
+
+  it("streams.write and getChunks complete without error (storage-backed)", async () => {
+    const runId = `s-${crypto.randomUUID().slice(0, 8)}`;
+    const channel = "test";
+    const doId = env.LOG_SESSION.idFromName(runId);
+    const stub = env.LOG_SESSION.get(doId);
+
+    await (stub as unknown as {
+      push(c: string, chunk: { index: number; data: unknown; timestamp: string }): Promise<void>;
+    }).push(channel, { index: 0, data: { ok: true }, timestamp: new Date().toISOString() });
+
+    const doId2 = env.LOG_SESSION.idFromName(runId);
+    const stub2 = env.LOG_SESSION.get(doId2);
+    const chunks = await (stub2 as unknown as {
+      getChunks(c: string, since?: number): Promise<{ index: number }[]>;
+    }).getChunks(channel);
+
+    expect(chunks.length).toBe(1);
+    expect(chunks[0]?.index).toBe(0);
+  });
+
+  it("WebSocket subscriber receives pushed chunks for live fan-out", async () => {
+    const runId = `ws-${crypto.randomUUID().slice(0, 8)}`;
+    const channel = "live";
+    const doId = env.LOG_SESSION.idFromName(runId);
+    const stub = env.LOG_SESSION.get(doId);
+
+    // Open a WebSocket against the DO's fetch handler.
+    const upgradeResp = await stub.fetch(
+      `https://log/?channel=${channel}`,
+      { headers: { Upgrade: "websocket" } },
+    );
+    expect(upgradeResp.status).toBe(101);
+    const ws = upgradeResp.webSocket;
+    expect(ws).toBeDefined();
+    if (!ws) throw new Error("no webSocket on response");
+    ws.accept();
+
+    // Collect messages received over the socket.
+    const received: string[] = [];
+    ws.addEventListener("message", (ev) => {
+      const data = ev.data;
+      received.push(typeof data === "string" ? data : "(binary)");
+    });
+
+    // Push a chunk via RPC; the DO should fan out to the connected WS.
+    await (stub as unknown as {
+      push(c: string, chunk: { index: number; data: unknown; timestamp: string }): Promise<void>;
+    }).push(channel, { index: 7, data: { live: true }, timestamp: new Date().toISOString() });
+
+    // Allow the message-loop tick.
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(received.length).toBeGreaterThanOrEqual(1);
+    const parsed = JSON.parse(received[received.length - 1]!) as {
+      index: number;
+      data: { live: boolean };
+    };
+    expect(parsed.index).toBe(7);
+    expect(parsed.data.live).toBe(true);
+
+    ws.close();
   });
 });

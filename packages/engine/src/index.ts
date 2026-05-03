@@ -23,6 +23,8 @@
  */
 
 // ── Recommended high-level API ──
+export { walkWorkflow } from "./runner/walk.js";
+export type { WalkOptions } from "./runner/walk.js";
 export { createWfkit } from "./client.js";
 export type { CreateWfkitOptions, Wfkit } from "./client.js";
 export { defineConnector } from "./define/connector.js";

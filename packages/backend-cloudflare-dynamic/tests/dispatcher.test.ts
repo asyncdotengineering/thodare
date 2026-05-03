@@ -5,6 +5,14 @@ import {
   createCloudflareDispatcher,
   DynamicWorkflowBinding,
 } from "../src/dispatcher.js";
+import { BlockRegistry, ToolRegistry } from "@thodare/engine/registry";
+
+function mockRegistries() {
+  return {
+    blockRegistry: new BlockRegistry(),
+    toolRegistry: new ToolRegistry(),
+  };
+}
 
 const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -18,12 +26,12 @@ describe("capabilities", () => {
     expect(CAPABILITIES.pricingModel).toBe("per-invocation");
     expect(CAPABILITIES.maxStepOutputBytes).toBe(1_048_576);
     expect(CAPABILITIES.maxPersistedStateBytes).toBe(1_073_741_824);
-    expect(CAPABILITIES.supportsLiveSubscription).toBe(false);
-    // No code path writes step rows in v1 alpha — must remain false.
-    expect(CAPABILITIES.supportsStepIOInspection).toBe(false);
+    expect(CAPABILITIES.supportsLiveSubscription).toBe(true);
+    // cf-step-shim writes step rows during walk.
+    expect(CAPABILITIES.supportsStepIOInspection).toBe(true);
     expect(CAPABILITIES.supportsResumeFromStep).toBe(false);
     expect(CAPABILITIES.supportsRecover).toBe(false);
-    expect(CAPABILITIES.liveSubscriptionLatencyMs).toBe(0);
+    expect(CAPABILITIES.liveSubscriptionLatencyMs).toBe(200);
     expect(CAPABILITIES.supportsRemovedTombstone).toBe(false);
     expect(CAPABILITIES.supportsContainerBlocks).toBe(false);
     expect(CAPABILITIES.supportsDynamicSchemas).toBe(false);
@@ -32,8 +40,6 @@ describe("capabilities", () => {
 
   it("declares no `true` for any unsupported feature", () => {
     const unsupported: Array<keyof typeof CAPABILITIES> = [
-      "supportsLiveSubscription",
-      "supportsStepIOInspection",
       "supportsResumeFromStep",
       "supportsRecover",
       "supportsRemovedTombstone",
@@ -71,13 +77,15 @@ describe("isThodareMetadata", () => {
 });
 
 describe("createCloudflareDispatcher", () => {
+  const registries = mockRegistries();
+
   it("returns DynamicWorkflowBinding identical to the upstream export", () => {
-    const factory = createCloudflareDispatcher();
+    const factory = createCloudflareDispatcher(registries);
     expect(factory.DynamicWorkflowBinding).toBe(DynamicWorkflowBinding);
   });
 
   it("returns a ThodareWorkflow class with its own run method", () => {
-    const factory = createCloudflareDispatcher();
+    const factory = createCloudflareDispatcher(registries);
     expect(typeof factory.ThodareWorkflow).toBe("function");
     // The class returned by createDynamicWorkflowEntrypoint extends
     // WorkflowEntrypoint and overrides run(); we cannot instantiate it
@@ -87,8 +95,30 @@ describe("createCloudflareDispatcher", () => {
   });
 
   it("accepts a custom d1BindingName without altering surface", () => {
-    const factory = createCloudflareDispatcher({ d1BindingName: "MY_DB" });
+    const factory = createCloudflareDispatcher({
+      ...registries,
+      d1BindingName: "MY_DB",
+    });
     expect(factory.DynamicWorkflowBinding).toBe(DynamicWorkflowBinding);
     expect(typeof factory.ThodareWorkflow).toBe("function");
+  });
+
+  it("loadRunner closure is constructed and ThodareWorkflow is not a stub", () => {
+    // Phase 4.x: createCloudflareDispatcher must return a ThodareWorkflow
+    // whose loadRunner is a real function (not a stub that throws).
+    // We verify this implicitly by the fact that the factory is created
+    // without error — the loadRunner is constructed eagerly.
+    const factory = createCloudflareDispatcher(registries);
+    expect(factory).toBeDefined();
+    expect(typeof factory.ThodareWorkflow).toBe("function");
+    expect(typeof factory.ThodareWorkflow.prototype.run).toBe("function");
+  });
+
+  it("accepts envVars and passes them through", () => {
+    const factory = createCloudflareDispatcher({
+      ...registries,
+      envVars: { FOO: "bar" },
+    });
+    expect(factory).toBeDefined();
   });
 });

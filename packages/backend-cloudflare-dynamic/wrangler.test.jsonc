@@ -9,5 +9,19 @@
       "database_name": "thodare-test",
       "database_id": "test-db"
     }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "LOG_SESSION",
+        "class_name": "LogSession"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["LogSession"]
+    }
   ]
 }

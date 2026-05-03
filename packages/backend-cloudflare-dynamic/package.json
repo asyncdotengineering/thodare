@@ -39,7 +39,8 @@
   },
   "dependencies": {
     "@cloudflare/dynamic-workflows": "^0.1.1",
-    "@thodare/backend": "workspace:*"
+    "@thodare/backend": "workspace:*",
+    "@thodare/engine": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.21",

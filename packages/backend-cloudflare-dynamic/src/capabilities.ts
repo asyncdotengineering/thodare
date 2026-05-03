@@ -20,14 +20,14 @@ export const CAPABILITIES: BackendCapabilities = {
   maxPersistedStateBytes: 1_073_741_824,
 
   // Headless-builder (5)
-  supportsLiveSubscription: false,
-  // No code path writes step rows in v1 alpha. The runtime walker bundle
-  // (Phase 4.x) will populate the `steps` table; until then `steps.list`
-  // returns []. Declared honestly as false.
-  supportsStepIOInspection: false,
+  supportsLiveSubscription: true,
+  // cf-step-shim writes step rows + lifecycle events during walk. Steps
+  // are scoped by organization_id so supportsStepIOInspection is honestly
+  // backed by the D1 `steps` table.
+  supportsStepIOInspection: true,
   supportsResumeFromStep: false,
   supportsRecover: false,
-  liveSubscriptionLatencyMs: 0,
+  liveSubscriptionLatencyMs: 200,
 
   // Op semantics (1)
   supportsRemovedTombstone: false,

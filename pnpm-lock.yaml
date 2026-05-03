@@ -109,6 +109,9 @@ importers:
       '@thodare/backend':
         specifier: workspace:*
         version: link:../backend
+      '@thodare/engine':
+        specifier: workspace:*
+        version: link:../engine
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.12.21

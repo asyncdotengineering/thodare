@@ -44,6 +44,8 @@ export interface WalkOptions {
   organizationId?: string;
 }
 
+export type { SerializedBlock, SerializedWorkflow, SerializedConnection } from "../types.js";
+
 export async function walkWorkflow(
   opts: WalkOptions,
 ): Promise<{ outputs: Record<string, unknown> }> {
