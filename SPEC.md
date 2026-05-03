@@ -61,8 +61,12 @@ sign-off.
   bad op; partial validity > no progress.
 - **T3.** **`hidden()` params are structural, not advisory.** Hidden
   params never appear in `GET /api/connectors`. The LLM cannot
-  reference them in op `params`; if it tries, the op is skipped with
-  `hidden_param_in_input`. This is the secret-handling boundary.
+  reference them in op `params`; if it tries, the field is stripped
+  from the resulting block before it lands in the workflow JSON, and
+  a structured `validation_errors[]` entry surfaces the rejection
+  (`field: <name>`, `error: "not exposed by block ..."`). The block
+  itself still applies — partial validity > no progress (T2). This is
+  the secret-handling boundary.
 - **T4.** **Workflow JSON is pinned at run-start.** The workflow JSON
   is passed as part of the run input; in-flight runs use the version
   they started with even if the workflow is patched mid-run. Sim's

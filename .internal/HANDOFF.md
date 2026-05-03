@@ -159,9 +159,11 @@ change the patch route, do not change this contract.**
 ### Hidden params (T3)
 
 Hidden params NEVER appear in `GET /api/connectors`. The LLM cannot
-reference them in op `params`; if it tries, the op is skipped with
-`hidden_param_in_input`. The defense is structural in
-`packages/engine/src/define/visibility.ts` and
+reference them in op `params`; if it tries, the field is stripped from
+the resulting block before it lands in the workflow JSON and a
+structured `validation_errors[]` entry surfaces the rejection. The
+block itself still applies (T2 partial-validity spirit). The defense
+is structural in `packages/engine/src/define/visibility.ts` and
 `packages/engine/src/operations/apply.ts`. **If you find yourself
 exposing a connector's full Zod schema somewhere user-facing, stop.**
 

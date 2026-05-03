@@ -53,12 +53,15 @@ single-shot LLM workflow construction work.
 Connectors can mark params as `hidden(z.string())`. Hidden params
 **never appear** in `GET /api/connectors`. The LLM literally cannot
 see them, so it cannot reference them in `params`. If it tries (e.g.,
-hallucinates `accessToken: "fake"`), the op is skipped with
-`reason_code: "hidden_param_in_input"`.
+hallucinates `accessToken: "fake"`), the field is stripped from the
+resulting block before it lands in the workflow JSON and a structured
+`validation_errors[]` entry surfaces the rejection (`field:
+"accessToken"`, `error: "not exposed by block ..."`). The block
+itself still applies — partial validity > no progress.
 
 This is structural, not prompt-guarded. A jailbroken LLM that ignores
 your system prompt still cannot land an `accessToken` field in the
-workflow — it would fail validation at apply time.
+workflow — the apply layer strips it.
 
 ## A two-round example
 
