@@ -2,13 +2,19 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { BackendSqlite } from "@thodare/openworkflow/sqlite";
 import { OpenWorkflow, Worker } from "@thodare/openworkflow";
-import type {
-  WorkflowSpec as OwWorkflowSpec,
-  StepApi as OwStepApi,
-  WorkflowFunction as OwWorkflowFunction,
-  WorkflowFunctionParams as OwWorkflowFunctionParams,
-  StepWaitTimeout,
-} from "@thodare/openworkflow/internal";
+
+// ── Derived types (from public OpenWorkflow surface, not internal.ts) ──
+// OpenWorkflow.implementWorkflow reveals WorkflowSpec, WorkflowFunction.
+type _OwImplFn = OpenWorkflow["implementWorkflow"];
+type _OwImplParams = Parameters<_OwImplFn>;
+type OwWorkflowSpec = _OwImplParams[0];
+type OwWorkflowFunction = _OwImplParams[1];
+// WorkflowFunctionParams and StepApi derived from WorkflowFunction.
+type OwWorkflowFunctionParams = Parameters<OwWorkflowFunction>[0];
+type OwStepApi = OwWorkflowFunctionParams["step"];
+// StepWaitTimeout extracted from StepApi.waitForSignal options.
+type _WaitForSignalOpts = Parameters<OwStepApi["waitForSignal"]>[0];
+type StepWaitTimeout = NonNullable<_WaitForSignalOpts["timeout"]>;
 import type {
   RunId,
   StepId,
@@ -370,7 +376,7 @@ export class BackendOpenworkflowSqlite {
   private started = false;
   private readonly specMap = new Map<
     string,
-    { spec: OwWorkflowSpec<unknown, unknown, unknown> }
+    { spec: OwWorkflowSpec }
   >();
 
   readonly events;
@@ -616,8 +622,8 @@ export class BackendOpenworkflowSqlite {
   ): Promise<RegisteredWorkflow> {
     const adapter = this;
 
-    const bridgeFn: OwWorkflowFunction<unknown, unknown> = async (
-      params: OwWorkflowFunctionParams<unknown>,
+    const bridgeFn: OwWorkflowFunction = async (
+      params: OwWorkflowFunctionParams,
     ) => {
       const runId = params.run.id;
       const step = new StepImpl(adapter, runId, params.step);
@@ -648,7 +654,7 @@ export class BackendOpenworkflowSqlite {
       }
     };
 
-    const owSpec: OwWorkflowSpec<unknown, unknown, unknown> = {
+    const owSpec: OwWorkflowSpec = {
       name: spec.name,
     };
 

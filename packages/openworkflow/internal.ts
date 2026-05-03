@@ -1,5 +1,5 @@
 // workflow
-export type { WorkflowSpec, Workflow, RetryPolicy } from "./core/workflow-definition.js";
+export type { Workflow } from "./core/workflow-definition.js";
 export { isWorkflow } from "./core/workflow-definition.js";
 
 // backend
@@ -12,12 +12,3 @@ export type {
   StepAttemptStatus,
   StepKind,
 } from "./core/step-attempt.js";
-
-// workflow-function (added for backend-openworkflow adapters — Phase 3)
-export type {
-  StepApi,
-  WorkflowFunction,
-  WorkflowFunctionParams,
-  StepFunctionConfig,
-  StepWaitTimeout,
-} from "./core/workflow-function.js";
