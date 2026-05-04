@@ -75,6 +75,13 @@ export function _buildLoadRunner<Env extends CFEnv = CFEnv>(
       );
     }
 
+    if (row.definition === null) {
+      throw new Error(
+        `backend-cloudflare-dynamic: workflow "${metadata.workflowId}"@${metadata.workflowVersion} ` +
+          `has no SerializedWorkflow attached. Call setWorkflowDefinition() before runWorkflow.`,
+      );
+    }
+
     let workflowJson: unknown;
     try {
       workflowJson = JSON.parse(row.definition) as unknown;
@@ -97,11 +104,10 @@ export function _buildLoadRunner<Env extends CFEnv = CFEnv>(
       );
     }
 
-    // Extract runId from the metadata (it's in the envelope but not in
-    // our typed metadata — CF passes instanceId via event on each run).
-    const runId =
-      (metadata["runId"] as string | undefined) ??
-      crypto.randomUUID();
+    // runId is validated by isThodareMetadata above — it is a required
+    // field. No fallback: a missing runId is data corruption that must
+    // surface rather than silently diverge from the adapter's event store.
+    const runId = metadata.runId;
 
     return {
       async run(event: { payload?: unknown }, cfStep: object) {

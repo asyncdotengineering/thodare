@@ -59,7 +59,7 @@ export function ddlStatements(): string[] {
       name TEXT NOT NULL,
       version INTEGER NOT NULL DEFAULT 1,
       spec_version INTEGER NOT NULL,
-      definition TEXT NOT NULL,
+      definition TEXT,
       created_at TEXT NOT NULL,
       PRIMARY KEY (organization_id, id, version)
     )`,

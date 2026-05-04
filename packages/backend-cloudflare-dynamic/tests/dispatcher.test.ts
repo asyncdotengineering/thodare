@@ -60,6 +60,7 @@ describe("isThodareMetadata", () => {
         workflowId: "wf-1",
         organizationId: "org-1",
         workflowVersion: "1",
+        runId: "run-1",
       }),
     ).toBe(true);
   });
@@ -68,6 +69,27 @@ describe("isThodareMetadata", () => {
     expect(isThodareMetadata({ organizationId: "o", workflowVersion: "1" })).toBe(false);
     expect(isThodareMetadata({ workflowId: "w", workflowVersion: "1" })).toBe(false);
     expect(isThodareMetadata({ workflowId: "w", organizationId: "o" })).toBe(false);
+  });
+
+  it("rejects metadata missing runId", () => {
+    expect(
+      isThodareMetadata({
+        workflowId: "w",
+        organizationId: "o",
+        workflowVersion: "1",
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts metadata with runId", () => {
+    expect(
+      isThodareMetadata({
+        workflowId: "w",
+        organizationId: "o",
+        workflowVersion: "1",
+        runId: "r",
+      }),
+    ).toBe(true);
   });
 
   it("rejects null and non-object", () => {

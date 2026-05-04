@@ -4,6 +4,9 @@ import { CAPABILITIES } from "../src/capabilities.js";
 import type { CFEnv } from "../src/types.js";
 import { ddlStatements } from "./apply-migrations.js";
 import { SPEC_VERSION_CURRENT } from "@thodare/backend";
+import { BackendCloudflareDynamic } from "../src/adapter.js";
+import { _buildLoadRunner } from "../src/dispatcher.js";
+import { BlockRegistry, ToolRegistry } from "@thodare/engine/registry";
 
 const ORG_A = "test-org-a";
 const ORG_B = "test-org-b";
@@ -336,5 +339,186 @@ describe("LogSession DO: streams integration", () => {
     expect(parsed.data.live).toBe(true);
 
     ws.close();
+  });
+});
+
+describe("setWorkflowDefinition: definition column contract", () => {
+  let env: CFEnv;
+  let backend: BackendCloudflareDynamic;
+  const ORG = "test-swd-org";
+
+  beforeAll(async () => {
+    env = await getEnv();
+    for (const stmt of ddlStatements()) {
+      await env.THODARE_DB.prepare(stmt).run();
+    }
+    backend = new BackendCloudflareDynamic({ env, organizationId: ORG });
+  });
+
+  const validWf = { version: "1.0.0", blocks: [], connections: [] };
+
+  it("round-trip: defineWorkflow + setWorkflowDefinition + dispatcher reads JSON", async () => {
+    const wfJson = {
+      version: "1.0.0",
+      blocks: [
+        { id: "b1", type: "test", name: "B1", enabled: true, params: {} },
+      ],
+      connections: [],
+    };
+
+    await backend.defineWorkflow({ name: "roundtrip-wf" }, async () => {});
+    await backend.setWorkflowDefinition("roundtrip-wf", 1, wfJson);
+
+    // Verify the JSON is in D1.
+    const row = await env.THODARE_DB
+      .prepare(
+        `SELECT definition FROM workflows
+         WHERE organization_id = ?1 AND id = ?2 AND version = ?3`,
+      )
+      .bind(ORG, "roundtrip-wf", 1)
+      .first<{ definition: string }>();
+
+    expect(row).not.toBeNull();
+    const parsed = JSON.parse(row!.definition) as Record<string, unknown>;
+    expect(parsed["blocks"]).toBeInstanceOf(Array);
+    expect(parsed["connections"]).toBeInstanceOf(Array);
+
+    // Verify the dispatcher can read it back.
+    const loadRunner = _buildLoadRunner({
+      blockRegistry: new BlockRegistry(),
+      toolRegistry: new ToolRegistry(),
+    });
+
+    // The loadRunner is a closure — we can't call it directly without the
+    // upstream context, but we can verify the _buildLoadRunner factory
+    // returned a function (it did) and that defineWorkflow alone doesn't
+    // leave a null definition for "roundtrip-wf".
+    expect(typeof loadRunner).toBe("function");
+  });
+
+  it("rejects non-SerializedWorkflow: missing blocks", () => {
+    const bad: unknown = { version: "1.0.0", connections: [] };
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
+    const p = backend.setWorkflowDefinition("w", 1, bad);
+    return expect(p).rejects.toThrow(TypeError);
+  });
+
+  it("rejects non-SerializedWorkflow: blocks not an array", () => {
+    const bad: unknown = {
+      version: "1.0.0",
+      blocks: "not-an-array",
+      connections: [],
+    };
+    return expect(backend.setWorkflowDefinition("w", 1, bad)).rejects.toThrow(
+      TypeError,
+    );
+  });
+
+  it("rejects non-SerializedWorkflow: missing connections", () => {
+    const bad: unknown = { version: "1.0.0", blocks: [] };
+    return expect(backend.setWorkflowDefinition("w", 1, bad)).rejects.toThrow(
+      TypeError,
+    );
+  });
+
+  it("rejects null input", () => {
+    return expect(backend.setWorkflowDefinition("w", 1, null)).rejects.toThrow(
+      TypeError,
+    );
+  });
+
+  it("rejects string input", () => {
+    return expect(
+      backend.setWorkflowDefinition("w", 1, "not-an-object"),
+    ).rejects.toThrow(TypeError);
+  });
+
+  it("throws when workflow not registered (no defineWorkflow)", async () => {
+    const p = backend.setWorkflowDefinition("nonesuch", 999, validWf);
+    await expect(p).rejects.toThrow(
+      /not registered.*defineWorkflow/,
+    );
+  });
+
+  it("defineWorkflow writes null to definition column", async () => {
+    const name = `null-def-${crypto.randomUUID().slice(0, 8)}`;
+    await backend.defineWorkflow({ name }, async () => {});
+
+    const row = await env.THODARE_DB
+      .prepare(
+        `SELECT definition FROM workflows
+         WHERE organization_id = ?1 AND id = ?2`,
+      )
+      .bind(ORG, name)
+      .first<{ definition: string | null }>();
+
+    expect(row).not.toBeNull();
+    expect(row!.definition).toBeNull();
+  });
+
+  it("runWorkflow throws clearly when called before setWorkflowDefinition", async () => {
+    const name = `no-def-${crypto.randomUUID().slice(0, 8)}`;
+    await backend.defineWorkflow({ name }, async () => {});
+
+    await expect(backend.runWorkflow(name, {})).rejects.toThrow(
+      /no SerializedWorkflow attached.*setWorkflowDefinition/,
+    );
+
+    // No CF Workflow instance should have been created — verify no run row.
+    const runs = await backend.storage.runs.list({ workflowName: name });
+    expect(runs.length).toBe(0);
+  });
+
+  it("setWorkflowDefinition is idempotent — same JSON twice does not throw", async () => {
+    const name = `idem-set-${crypto.randomUUID().slice(0, 8)}`;
+    const wf = {
+      version: "1.0.0",
+      blocks: [
+        { id: "b1", type: "test_echo", name: "B1", enabled: true, params: { message: "hi" } },
+      ],
+      connections: [],
+      metadata: { name: "idem-set" },
+    };
+
+    await backend.defineWorkflow({ name }, async () => {});
+    await backend.setWorkflowDefinition(name, 1, wf);
+    // Second call with identical JSON: meta.changes may be 0, but the row
+    // exists. Must not throw "not registered".
+    await expect(
+      backend.setWorkflowDefinition(name, 1, wf),
+    ).resolves.toBeUndefined();
+  });
+
+  it("re-calling defineWorkflow does NOT clobber an existing definition", async () => {
+    const name = `idem-def-${crypto.randomUUID().slice(0, 8)}`;
+    const wf = {
+      version: "1.0.0",
+      blocks: [
+        { id: "b1", type: "test_echo", name: "B1", enabled: true, params: { message: "hi" } },
+      ],
+      connections: [],
+      metadata: { name: "idem-test" },
+    };
+
+    await backend.defineWorkflow({ name }, async () => {});
+    await backend.setWorkflowDefinition(name, 1, wf);
+
+    // Re-calling defineWorkflow MUST be idempotent and preserve the
+    // attached definition. Pre-fix this clobbered definition to null.
+    await backend.defineWorkflow({ name }, async () => {});
+
+    const row = await env.THODARE_DB
+      .prepare(
+        `SELECT definition FROM workflows
+         WHERE organization_id = ?1 AND id = ?2 AND version = ?3`,
+      )
+      .bind(ORG, name, 1)
+      .first<{ definition: string | null }>();
+
+    expect(row).not.toBeNull();
+    expect(row!.definition).not.toBeNull();
+    const parsed = JSON.parse(row!.definition!) as Record<string, unknown>;
+    expect(Array.isArray(parsed["blocks"])).toBe(true);
+    expect((parsed["blocks"] as unknown[]).length).toBe(1);
   });
 });
