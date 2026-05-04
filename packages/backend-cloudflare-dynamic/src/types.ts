@@ -27,6 +27,7 @@ export interface ThodareMetadata {
   readonly workflowId: string;
   readonly organizationId: string;
   readonly workflowVersion: string;
+  readonly runId: string;
   // Index signature so type predicate works against DispatcherMetadata
   // (Record<string, unknown>). Keys above are load-bearing for routing;
   // the upstream library forwards any extras verbatim per its contract.
@@ -41,6 +42,7 @@ export function isThodareMetadata(
     m !== null &&
     typeof (m as Record<string, unknown>)["workflowId"] === "string" &&
     typeof (m as Record<string, unknown>)["organizationId"] === "string" &&
-    typeof (m as Record<string, unknown>)["workflowVersion"] === "string"
+    typeof (m as Record<string, unknown>)["workflowVersion"] === "string" &&
+    typeof (m as Record<string, unknown>)["runId"] === "string"
   );
 }

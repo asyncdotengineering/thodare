@@ -47,7 +47,7 @@ const WORKFLOWS_DDL = `
     name TEXT NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
     spec_version INTEGER NOT NULL,
-    definition TEXT NOT NULL,
+    definition TEXT,
     created_at TEXT NOT NULL,
     PRIMARY KEY (organization_id, id, version)
   )
@@ -161,15 +161,14 @@ export class BackendCloudflareDynamic implements BackendCore {
     const version = spec.version ?? 1;
     const createdAt = isoNow();
 
-    const definition = JSON.stringify({
-      name: spec.name,
-      version,
-      handlerRegistered: false,
-    });
-
+    // v1 alpha: defineWorkflow registers name+version only. Use
+    // setWorkflowDefinition(...) to attach the SerializedWorkflow JSON
+    // before runWorkflow. INSERT OR IGNORE preserves any existing
+    // definition — re-calling defineWorkflow on an already-registered
+    // (org, name, version) is a no-op rather than clobbering definition.
     await this.env.THODARE_DB
       .prepare(
-        `INSERT OR REPLACE INTO workflows
+        `INSERT OR IGNORE INTO workflows
          (organization_id, id, name, version, spec_version, definition, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
       )
@@ -179,12 +178,76 @@ export class BackendCloudflareDynamic implements BackendCore {
         spec.name,
         version,
         SPEC_VERSION_CURRENT,
-        definition,
+        null,
         createdAt,
       )
       .run();
 
     return { name: spec.name, specVersion: SPEC_VERSION_CURRENT };
+  }
+
+  /**
+   * CF-specific extension: attach the SerializedWorkflow JSON to a registered
+   * workflow. Required before runWorkflow can dispatch — the dispatcher's
+   * loadRunner reads this column and the walker interprets it.
+   *
+   * Other ThodareBackend adapters (PG/SQLite) execute via openworkflow's
+   * runtime walker which holds the handler in-process; CF dispatch runs in
+   * a serverless isolate so the JSON must be persisted in D1.
+   */
+  async setWorkflowDefinition(
+    name: string,
+    version: number,
+    serializedWorkflow: unknown,
+  ): Promise<void> {
+    if (
+      typeof serializedWorkflow !== "object" ||
+      serializedWorkflow === null ||
+      !("blocks" in serializedWorkflow) ||
+      !Array.isArray(
+        (serializedWorkflow as Record<string, unknown>)["blocks"],
+      ) ||
+      !("connections" in serializedWorkflow) ||
+      !Array.isArray(
+        (serializedWorkflow as Record<string, unknown>)["connections"],
+      )
+    ) {
+      throw new TypeError(
+        "setWorkflowDefinition: serializedWorkflow must be a non-null object with `blocks` and `connections` arrays",
+      );
+    }
+
+    const result = await this.env.THODARE_DB
+      .prepare(
+        `UPDATE workflows SET definition = ?1
+         WHERE organization_id = ?2 AND id = ?3 AND version = ?4`,
+      )
+      .bind(
+        JSON.stringify(serializedWorkflow),
+        this.orgId,
+        name,
+        version,
+      )
+      .run();
+
+    if (result.meta.changes === 0) {
+      // changes=0 can mean either "row not found" or "row matched but value
+      // unchanged" depending on the SQLite/D1 build. Disambiguate with an
+      // explicit existence check before throwing.
+      const existing = await this.env.THODARE_DB
+        .prepare(
+          `SELECT 1 FROM workflows
+           WHERE organization_id = ?1 AND id = ?2 AND version = ?3 LIMIT 1`,
+        )
+        .bind(this.orgId, name, version)
+        .first<{ "1": number }>();
+
+      if (!existing) {
+        throw new Error(
+          `setWorkflowDefinition: workflow "${name}" v${version} not registered — call defineWorkflow first`,
+        );
+      }
+    }
   }
 
   async runWorkflow(
@@ -206,16 +269,22 @@ export class BackendCloudflareDynamic implements BackendCore {
 
     const row = await this.env.THODARE_DB
       .prepare(
-        `SELECT id, name, version FROM workflows
+        `SELECT id, name, version, definition FROM workflows
          WHERE organization_id = ?1 AND id = ?2
          ORDER BY version DESC LIMIT 1`,
       )
       .bind(this.orgId, name)
-      .first<{ id: string; name: string; version: number }>();
+      .first<{ id: string; name: string; version: number; definition: string | null }>();
 
     if (!row) {
       throw new Error(
         `backend-cloudflare-dynamic: workflow "${name}" not found. Call defineWorkflow first.`,
+      );
+    }
+
+    if (row.definition === null) {
+      throw new Error(
+        `backend-cloudflare-dynamic: workflow "${name}" v${row.version} has no SerializedWorkflow attached. Call setWorkflowDefinition() before runWorkflow.`,
       );
     }
 

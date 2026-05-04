@@ -10,6 +10,13 @@
       "database_id": "test-db"
     }
   ],
+  "workflows": [
+    {
+      "name": "thodare-test",
+      "binding": "WORKFLOWS",
+      "class_name": "ThodareWorkflow"
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {

@@ -11,8 +11,7 @@ does not extend openworkflow.
 
 - ✅ **Storage layer** — events, runs, steps, hooks tables on D1; idempotent DDL;
   per-org tenant scoping enforced at the SQL layer.
-- ✅ **Workflow definitions persisted** — `defineWorkflow` writes to D1.
-- ✅ **Idempotent run creation** — `runWorkflow` honors `opts.idempotencyKey`.
+- ✅ **Workflow definitions persisted** — `defineWorkflow` registers name+version; `setWorkflowDefinition` attaches the SerializedWorkflow JSON. The CF adapter has a separate registration+definition step because the dispatcher runs in a serverless isolate and the JSON must be persisted in D1 before dispatch.
 - ✅ **Signal / cancel** — delegated to CF Workflows `instance.sendEvent` / `terminate`.
 - ✅ **Runtime walker** — `walkWorkflow` from `@thodare/engine` executes workflow JSON
   inside CF Workflows. Step rows + lifecycle events written to D1 with `organization_id`.
@@ -36,6 +35,35 @@ does not extend openworkflow.
 - ⚠️ **WebSocket pattern is non-hibernation.** Uses `WebSocketPair` +
   `ws.accept()`. Works correctly but limits scale vs the Workers
   hibernation API. Acceptable for alpha.
+## Registration → setDefinition sequence
+
+The CF adapter has a **two-step registration sequence** that differs from other Thodare backends:
+
+1. **`defineWorkflow(spec, handler)`** — registers the workflow name+version in D1 with `definition: null`. The handler is accepted but not used (CF dispatch runs in a serverless isolate; the handler cannot be held in-process).
+
+2. **`setWorkflowDefinition(name, version, serializedWorkflow)`** — attaches the SerializedWorkflow JSON (`{ version, blocks, connections, ... }`) to the registered workflow. This is a CF-specific extension on `BackendCloudflareDynamic`. Required before `runWorkflow` — the dispatcher's `loadRunner` reads this column to feed the runtime walker.
+
+3. **`runWorkflow(name, input, opts?)`** — dispatches a run. Fails with a clear error if `setWorkflowDefinition` hasn't been called for this workflow version.
+
+```ts
+const backend = await createBackendCloudflareDynamic({ env, organizationId });
+
+// Step 1: register
+await backend.defineWorkflow({ name: "my-wf" }, async () => {});
+
+// Step 2: attach the workflow JSON (CF-specific)
+await backend.setWorkflowDefinition("my-wf", 1, {
+  version: "1.0.0",
+  blocks: [{ id: "b1", type: "echo", name: "Echo", enabled: true, params: {} }],
+  connections: [],
+});
+
+// Step 3: dispatch
+const { runId } = await backend.runWorkflow("my-wf", { input: 42 });
+```
+
+Other adapters (PG, SQLite) don't need this — they register the handler in-process and the runtime walker holds it directly. The CF adapter's dispatcher runs in a serverless isolate, so the workflow JSON must be persisted in D1 before `runWorkflow` dispatches.
+
 - ⚠️ **`resumeFromStep` / `recover`** throw `not_implemented` —
   `BackendCapabilities` declares them `false`.
 
@@ -132,6 +160,11 @@ export default {
 
     // Persists workflow definition to D1.
     await backend.defineWorkflow({ name: "hello" }, async () => {});
+    await backend.setWorkflowDefinition("hello", 1, {
+      version: "1.0.0",
+      blocks: [/* ... */],
+      connections: [/* ... */],
+    });
 
     // Creates a CF Workflow instance. The runtime walker executes the
     // workflow JSON via @thodare/engine's walkWorkflow.
@@ -188,6 +221,20 @@ export default {
    does not internally cache — rely on Worker Loader's isolate cache.
    Loader callbacks must be cheap; the adapter's loader makes one D1 read
    per resume.
+
+## Known test limitations
+
+- **Real-engine E2E: first dispatch works, second may not.** The
+  `tests/real-engine-e2e.test.ts` exercises `wrapWorkflowBinding.create()`
+  → CF Workflows engine → `ThodareWorkflow.run()` → `walkWorkflow`. The
+  first invocation dispatches successfully in the `@cloudflare/vitest-pool-workers`
+  workerd (v0.12.21) — step rows and lifecycle events land in D1. A
+  second invocation in the same test run may stay in `"running"` status
+  indefinitely, which is consistent with the upstream library's own test gap
+  (`code-reviews/dynamic-workflows.md` §6: no end-to-end test that exercises
+  `wrapWorkflowBinding` → `WorkflowEntrypoint.run` with a real WorkerLoader).
+  **Phase 5+ follow-up:** validate against a real CF Workflows deployment
+  with `wrangler dev`.
 
 ## Fallback
 

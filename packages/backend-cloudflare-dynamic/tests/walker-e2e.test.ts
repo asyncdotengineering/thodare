@@ -10,12 +10,18 @@ import type { CFEnv } from "../src/types.js";
 import type { SerializedWorkflow } from "@thodare/engine/walk";
 import { BlockRegistry } from "@thodare/engine/registry";
 import { ToolRegistry } from "@thodare/engine/registry";
-import type { Tool, ToolContext } from "@thodare/engine";
+import type { Tool } from "@thodare/engine";
 import {
   _buildLoadRunner,
   createCloudflareDispatcher,
   DynamicWorkflowBinding,
 } from "../src/dispatcher.js";
+import { BackendCloudflareDynamic } from "../src/adapter.js";
+import {
+  ECHO_TOOL,
+  ECHO_BLOCK,
+  buildTestWorkflowJson,
+} from "./_fixtures.js";
 
 const ORG_ID = "test-walker-org";
 
@@ -24,85 +30,15 @@ async function getEnv(): Promise<CFEnv> {
   return (mod as unknown as { env: Record<string, unknown> }).env as unknown as CFEnv;
 }
 
-// ── Minimal 3-block workflow for the walker ──
-
-const ECHO_TOOL: Tool = {
-  id: "test.echo",
-  name: "Echo",
-  description: "Returns input unchanged",
-  params: { message: { type: "string", visibility: "user-or-llm" } },
-  outputs: { result: { type: "string" } },
-  execute: async (params: unknown, _ctx: ToolContext) => {
-    const p = params as { message: string };
-    return { result: p.message };
-  },
-};
-
-const ECHO_BLOCK = {
-  type: "test_echo",
-  name: "Echo",
-  description: "Echoes a message",
-  category: "action" as const,
-  kind: "compute" as const,
-  subBlocks: [],
-  outputs: { result: { type: "string" as const } },
-  tools: {
-    access: ["test.echo"],
-    config: {
-      tool: () => "test.echo",
-    },
-  },
-};
-
 function buildWorkflowJson(
   blockOverrides?: Partial<Record<number, Record<string, unknown>>>,
 ): SerializedWorkflow {
-  const blocks = [
-    {
-      id: "block-1",
-      type: "test_echo",
-      name: "First",
-      enabled: true,
-      params: { message: "hello" },
-    },
-    {
-      id: "block-2",
-      type: "test_echo",
-      name: "Second",
-      enabled: true,
-      params: { message: "world" },
-    },
-    {
-      id: "block-3",
-      type: "test_echo",
-      name: "Third",
-      enabled: true,
-      params: { message: "done" },
-    },
-  ];
-
-  if (blockOverrides) {
-    for (const [idx, overrides] of Object.entries(blockOverrides)) {
-      const i = Number(idx);
-      if (blocks[i]) {
-        Object.assign(blocks[i]!, overrides);
-      }
-    }
-  }
-
-  return {
-    version: "1.0.0",
-    blocks,
-    connections: [
-      { source: "block-1", target: "block-2" },
-      { source: "block-2", target: "block-3" },
-    ],
-    metadata: { name: "e2e-walker-test" },
-  };
+  return buildTestWorkflowJson(blockOverrides) as SerializedWorkflow;
 }
 
 describe("walker E2E: 3-block workflow", () => {
   let env: CFEnv;
+  let backend: BackendCloudflareDynamic;
 
   beforeAll(async () => {
     env = await getEnv();
@@ -110,16 +46,10 @@ describe("walker E2E: 3-block workflow", () => {
       await env.THODARE_DB.prepare(stmt).run();
     }
 
-    // Insert the workflow definition into D1 so the loader can find it.
-    const wf = buildWorkflowJson();
-    await env.THODARE_DB
-      .prepare(
-        `INSERT OR REPLACE INTO workflows
-         (organization_id, id, name, version, spec_version, definition, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-      )
-      .bind(ORG_ID, "e2e-wf", "e2e-wf", 1, 1, JSON.stringify(wf), new Date().toISOString())
-      .run();
+    // Use production registration path: defineWorkflow + setWorkflowDefinition.
+    backend = new BackendCloudflareDynamic({ env, organizationId: ORG_ID });
+    await backend.defineWorkflow({ name: "e2e-wf" }, async () => {});
+    await backend.setWorkflowDefinition("e2e-wf", 1, buildWorkflowJson());
   });
 
   it("loadRunner returns a runner with a run method", async () => {
@@ -148,19 +78,13 @@ describe("walker E2E: 3-block workflow", () => {
     const toolRegistry = new ToolRegistry();
     toolRegistry.register(ECHO_TOOL);
 
-    // Insert the workflow JSON
+    // Use production registration path: defineWorkflow + setWorkflowDefinition.
     const wf = buildWorkflowJson();
     const runId = "mock-run-" + crypto.randomUUID().slice(0, 8);
     const wfId = "wfx-" + crypto.randomUUID().slice(0, 8);
 
-    await env.THODARE_DB
-      .prepare(
-        `INSERT OR REPLACE INTO workflows
-         (organization_id, id, name, version, spec_version, definition, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-      )
-      .bind(ORG_ID, wfId, wfId, 1, 1, JSON.stringify(wf), new Date().toISOString())
-      .run();
+    await backend.defineWorkflow({ name: wfId }, async () => {});
+    await backend.setWorkflowDefinition(wfId, 1, wf);
 
     // Insert a run row (simulating what adapter.runWorkflow does)
     await env.THODARE_DB
@@ -283,14 +207,8 @@ describe("walker E2E: 3-block workflow", () => {
     const runId = "fail-run-" + crypto.randomUUID().slice(0, 8);
     const wfId = "wff-" + crypto.randomUUID().slice(0, 8);
 
-    await env.THODARE_DB
-      .prepare(
-        `INSERT OR REPLACE INTO workflows
-         (organization_id, id, name, version, spec_version, definition, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-      )
-      .bind(ORG_ID, wfId, wfId, 1, 1, JSON.stringify(wf), new Date().toISOString())
-      .run();
+    await backend.defineWorkflow({ name: wfId }, async () => {});
+    await backend.setWorkflowDefinition(wfId, 1, wf);
 
     await env.THODARE_DB
       .prepare(
@@ -345,5 +263,46 @@ describe("walker E2E: 3-block workflow", () => {
     const run = await storage.runs.get(runId as never);
     expect(run?.status).toBe("failed");
     expect(run?.error).toBeDefined();
+  });
+
+  it("defineWorkflow without setWorkflowDefinition: dispatcher loadRunner throws", async () => {
+    const blockRegistry = new BlockRegistry();
+    blockRegistry.register(ECHO_BLOCK);
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(ECHO_TOOL);
+
+    const wfId = `null-def-${crypto.randomUUID().slice(0, 8)}`;
+    await backend.defineWorkflow({ name: wfId }, async () => {});
+    // Intentionally do NOT call setWorkflowDefinition.
+
+    const { dispatchWorkflow } = await import("@cloudflare/dynamic-workflows");
+    const loadRunner = _buildLoadRunner({ blockRegistry, toolRegistry });
+
+    let errorMessage = "";
+    try {
+      await dispatchWorkflow(
+        { env, ctx: {} as ExecutionContext },
+        {
+          payload: {
+            __dispatcherMetadata: {
+              workflowId: wfId,
+              organizationId: ORG_ID,
+              workflowVersion: "1",
+              runId: "null-def-run",
+            },
+            params: {},
+          },
+          timestamp: new Date(),
+          instanceId: "null-def-run",
+        },
+        { do: async <T>(_n: string, fn: () => Promise<T>) => fn(), sleep: async () => {}, waitForEvent: async () => undefined },
+        loadRunner,
+      );
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(errorMessage).toContain("no SerializedWorkflow attached");
+    expect(errorMessage).toContain("setWorkflowDefinition");
   });
 });
