@@ -2,7 +2,7 @@
 
 > **Audience:** the next Claude Code (or human) session that opens this repo.
 > **Purpose:** ship the next feature without re-deriving everything we already decided.
-> **Last update:** 2026-05-02 (after the v1 design phase — Backend abstraction proposal + 4 use cases + RELEASE.md + AGENTS.md rename).
+> **Last update:** 2026-05-04 (after v1 Phases 1–4 + 4.x + 4.x.1 — full CF adapter incl. runtime walker, DO+WS streams, real-engine e2e, upstream-verification audit and fix-up; all merged to `dev`).
 
 If you read nothing else, read this file plus [`../AGENTS.md`](../AGENTS.md), [`../SPEC.md`](../SPEC.md), and [`../research/backend-abstraction-proposal.md`](../research/backend-abstraction-proposal.md). The proposal is what v1 ships.
 
@@ -57,28 +57,55 @@ The **load-bearing decision document** is [`../SPEC.md`](../SPEC.md)
 
 | | |
 |---|---|
-| Version (shipped) | `@thodare/api@0.1.1`, others `@0.1.0` (alpha) — unchanged from v0 |
+| Version (shipped to npm) | `@thodare/api@0.1.1`, others `@0.1.0` (alpha) — unchanged on npm; **v1 alpha packages are committed but NOT YET PUBLISHED** |
+| **Branch state** | `dev` is ahead of `main` by **10 squash-merged PRs** (Phases 1–4.x.1). `main` still at `5970bd5`. `dev → main` happens at v1.0 GA, not per-phase. |
 | **Version (next)** | **`1.0.0-alpha.N` → `1.0.0`** per `../RELEASE.md`. Backend abstraction is the v1 release. |
-| Packages published | 4 (`@thodare/engine`, `@thodare/api`, `@thodare/cli`, `@thodare/openworkflow`) |
+| Packages published to npm | 4 still: `@thodare/engine`, `@thodare/api`, `@thodare/cli`, `@thodare/openworkflow`. The v1 alpha packages (`@thodare/backend`, `@thodare/backend-contract-tests`, `@thodare/backend-openworkflow-pg`, `@thodare/backend-openworkflow-sqlite`, `@thodare/backend-openworkflow-shared`, `@thodare/backend-cloudflare-dynamic`) live in `dev` but have not been published. |
 | Build | `pnpm -r run build` → all green |
-| Tests | `pnpm test` → **209 across 41 test files** (117 engine + 56 api + 36 cli) — v1 adds the contract test suite (~37 new tests across 6 packs) |
-| Docs site | 31 pages, Diataxis quadrants, deployed to GH Pages |
+| **Tests** | `pnpm -r --filter '!@thodare/docs' --workspace-concurrency=1 run test` → **370 across all packages** (was 209 before v1). 122 engine + 63 api + 36 cli + 22 contract-tests + 41 PG + 40 SQLite + 46 CF-dynamic. Each adapter exercises the `@thodare/backend-contract-tests` parameterized suite + adapter-specific tests. |
+| Docs site | 31 pages, Diataxis quadrants, deployed to GH Pages — unchanged this session |
 | Repo stars | 1 (octalpixel) |
-| Open issues / PRs | 0 (alpha; solo-dogfood-no-customers — see `../RELEASE.md`) |
+| Open issues / PRs | 0 — every PR squash-merged into `dev` |
 
-### v1 work in flight (designed, not yet implemented)
+### v1 work — what shipped on `dev` this session and the prior v1 work
 
-The `research/backend-abstraction-proposal.md` (~13k words) is **the v1 release**. Architectural design done; implementation has not started. Six phases:
+`research/backend-abstraction-proposal.md` (~13k words) is **the v1 release**. As of 2026-05-04 the implementation status is:
 
-- **Phase 1 (~1.5w)** — `packages/backend/` (pure types) + `packages/backend-contract-tests/` (parameterized vitest suite). Ship the contract first; second adapter validates.
-- **Phase 2 (~1.5w)** — Credentials primitive (`packages/engine/src/credentials/` + `packages/api/src/routes/credentials.ts` + `workflow.credentials` table + AES-256-GCM at rest).
-- **Phase 3 (~1w)** — Extract the openworkflow adapter (`packages/backend-openworkflow-pg/` + `packages/backend-openworkflow-sqlite/`). Backward-compatible.
-- **Phase 4 (~1.5w)** — Second adapter (`packages/backend-cloudflare-dynamic/`, ~150 LoC). Proves the abstraction.
-- **Phase 5 (~4w)** — Platform-native backends (`backend-vercel`, `backend-aws`) + `examples/headless-ui-demo/`.
-- **Phase 5b (~3w, parallelizable)** — Six v1 design closures: container blocks (§3.10), output `hiddenFromDisplay` + `paramVisibility: 'llm-only'` (§3.11), dynamic schema endpoint (§3.12), timezone-aware waits (§3.13), diff→ops endpoint (§3.14), `@thodare/router` companion package (§4.8). Plus 5 first-party connector packages (`@thodare/connector-{slack,resend,github,stripe,google-sheets}`) shipping ActivePieces-style.
+- **Phase 1 (PR #1, merged)** — `packages/backend/` + `packages/backend-contract-tests/`. ✅ Shipped to `dev`.
+- **Phase 2 (PR #3, merged)** — Credentials primitive (`packages/engine/src/credentials/` + AES-256-GCM at rest). ✅ Shipped.
+- **Phase 3 (PR #5, merged)** — `packages/backend-openworkflow-pg/` + `packages/backend-openworkflow-sqlite/`. First two concrete `ThodareBackend` adapters. ✅ Shipped.
+- **Phase 3.5 (PR #6, merged)** — T6 minimization: dropped Phase 3's vendor patch; types now derived from `@thodare/openworkflow` public surface via `Parameters<...>` / `ReturnType<...>`. Zero source-file delta to vendored openworkflow. ✅ Shipped.
+- **Phase 3.6 (PR #7, merged)** — PG/SQLite dedup: extracted `packages/backend-openworkflow-shared/` (CAPABILITIES, StepImpl, helpers, derived types) + SleepSignal correctness fix in bridge function. ✅ Shipped.
+- **Phase 4 (PR #8, merged)** — `packages/backend-cloudflare-dynamic/` first version. CF adapter wraps `@cloudflare/dynamic-workflows@^0.1.1`. D1 storage layer + dispatcher factory + capability-honest declarations. **Stubbed runtime walker** (loader threw `not_implemented` after fetching workflow JSON). 19 tests. ✅ Shipped.
+- **Phase 4.x (PR #9, merged)** — Runtime walker (reuses `@thodare/engine`'s `walkWorkflow` via a CF-step shim, ~260 LoC) + `LogSession` Durable Object with WebSocket fan-out + DO storage persistence. Capability flips: `supportsLiveSubscription: true`, `supportsStepIOInspection: true`, `liveSubscriptionLatencyMs: 200`. Bumped `@cloudflare/vitest-pool-workers` 0.8 → 0.12.21 (workerd 1.20260310.1) for `cloudflare:workers.exports` support. 29 tests. ✅ Shipped.
+- **Phase 4.x.1 (PR #10, merged)** — Upstream-verification fix-up. Real-engine end-to-end test (CF Workflows engine actually dispatches in vitest-pool-workers). `setWorkflowDefinition()` method with null-definition contract (defineWorkflow registers; setWorkflowDefinition attaches the SerializedWorkflow JSON). `runId` required field (no more silent UUID fallback). `INSERT OR IGNORE` for idempotent defineWorkflow. 46 tests. ✅ Shipped.
+
+### What's left for v1.0
+
+- **Phase 5 (~4w; AWS skipped)** — `@thodare/backend-vercel` (~250 LoC) + `examples/headless-ui-demo/` + `examples/deploy-cloudflare/`. (AWS adapter explicitly **out of scope** for v1.0 per user direction.)
+- **Phase 5+ follow-ups for the CF adapter** — real CF Workflows deploy validation (`wrangler dev`); hibernating WebSocket API for `LogSession`; explicit `organization_id` on DO chunks if a stricter security model is required; harness de-vacuing + `start()` lifecycle formalization (queued from PR #7 ledger).
+- **Phase 5b (~3w, parallelizable)** — Six v1 design closures: container blocks (§3.10), `hiddenFromDisplay` + `paramVisibility: 'llm-only'` (§3.11), dynamic schema endpoint (§3.12), timezone-aware waits (§3.13), diff→ops endpoint (§3.14), `@thodare/router` (§4.8). Plus 5 first-party connector packages (`@thodare/connector-{slack,resend,github,stripe,google-sheets}`) ActivePieces-style.
 - **Phase 6 (post-1.0)** — Deprecate legacy `createWfkit({ backend: BackendPostgres })`. Migration codemod.
 
 **Marketplace primitive (per-org installed registry + sandboxed custom-connector execution) is HELD to v1.1+** per `next-up.md`. v1 ships first-party connectors as plain npm packages.
+
+### Branch ledger (as of 2026-05-04)
+
+`dev` HEAD: `d1a6726`. `main` HEAD: `5970bd5`.
+
+```
+d1a6726 Phase 4.x.1: definition-shape + runId + workflows registration (#10)
+7fb1562 Phase 4.x: runtime walker + DO+WS live subscription (#9)
+d5dfd9a Phase 4: backend-cloudflare-dynamic — CF Workflows GA adapter (#8)
+3385439 PG/SQLite dedup + SleepSignal correctness (#7)
+1e7d26d T6 minimization (#6)
+83c448f Phase 3: openworkflow adapter (PG + SQLite) (#5)
+7219cdf T3 contract-vs-code drift (#4)
+4b1167e Phase 2: Credentials primitive (#3)
+ed57d0c SPEC §3 T1: EditOp doc-drift (#2)
+9df330f Phase 1: backend abstraction (#1)
+5970bd5 (main) HANDOFF.md — v1 design phase complete; openworkflow stays default
+```
 
 ### What v0 already shipped
 
@@ -335,39 +362,91 @@ mascot was generated this way. Don't rely on it for production work
 
 ## 8. What I would do next if I were continuing
 
-**Start Phase 1 of the Backend abstraction proposal.** Everything else (Tier 1 fast-wins from `next-up.md`, second adapters, marketplace) waits behind this — Phase 1 is the gating dependency for v1.
+**Phases 1 → 4.x.1 are done and merged to `dev`.** All concrete work shipped: backend abstraction (types + contract suite), credentials primitive, openworkflow adapters (PG + SQLite + shared), Cloudflare Workflows adapter (full runtime walker + DO+WS live streaming + real-engine e2e). `main` is still at `5970bd5`.
 
-### Phase 1 — concrete steps (~1.5 weeks)
+**Next is Phase 5 (minus AWS).** AWS is explicitly out of scope per user direction. So the work is:
 
-1. `git checkout -b backend-abstraction-phase-1`
-2. **`packages/backend/`** — pure types + zero runtime. Translate `research/backend-abstraction-proposal.md` §3.1 into TS:
-   - `ThodareBackend` interface (extends `Storage`, `Queue`, `Streamer`)
-   - `BackendCapabilities` interface (~17 flags)
-   - `ThodareStep` interface (`run`, `sleep`, `sleepUntilLocalTime` per §3.13, `waitForSignal`, `getWriter`)
-   - `ThodareCtx` interface
-   - Branded `SpecVersion` constants (per §3.4 — lift WDK pattern verbatim)
-   - Re-export Zod schemas for every event / payload shape
-3. **`packages/backend-contract-tests/`** — parameterized vitest suite. Translate proposal §3.7 test packs #1–37:
-   - `runContractTests(backend, options?)` is the only export
-   - Test packs gated by capability flags (skip when `supportsX === false`)
-   - Mode-specific packs (`Queue.mode === "push" | "pull" | "embedded"`)
-4. **No runtime yet.** Phase 1 ships ONLY types + tests. Phase 3 wraps openworkflow into the first concrete adapter.
-5. **Pre-merge gates** (per `RELEASE.md`): `pnpm test` green, `tsc --noEmit` clean, Changeset added (`pnpm changeset` — bump `@thodare/backend@1.0.0-alpha.1`), docs page drafted in the right Diataxis quadrant.
-6. Merge to main → `pnpm publish --tag alpha` → live on npm under the `alpha` dist-tag. **You are the first user.** `npm install @thodare/backend@alpha` from a scratch directory; play with the types; verify they feel right.
+### Phase 5a — `@thodare/backend-vercel` (~250 LoC, ~1w)
 
-### Why this order
+Per `research/backend-abstraction-proposal.md` §4.4. Composes Vercel's own primitives directly (NOT WDK-wrapped):
 
-- The contract suite anchors the abstraction in executable form. Without it, "Backend abstraction" is essay.
-- Shipping types-only is reversible. The `@thodare/backend@1.0.0-alpha.1` tag stays on `alpha`; if the interface shape needs to evolve in Phase 2, bump `alpha.2` and document the change.
-- Phase 3 (extract openworkflow as first adapter) is the proof point — once a real adapter passes contract tests, the abstraction is real.
+| Thodare needs | Vercel primitive |
+|---|---|
+| Storage + materialized views | Vercel Postgres (managed Neon) |
+| Credential vault | Vercel Postgres (`workflow.credentials`) |
+| Queue (`__wkf_workflow_*` / `__wkf_step_*`) | Vercel Queues (beta — verify) OR Vercel Cron + poll worker fallback |
+| Step execution | Vercel Functions (Lambda-style) |
+| Cron / scheduled triggers | Vercel Cron |
+| Live run subscription | Vercel Functions returning streaming `Response` |
+| Large step output spillover | Vercel Blob |
 
-### What's deliberately NOT first
+Capability flags (proposal §4.4): `serverless: true`, `maxStepDurationMs: 300_000` (Pro), `signalPrecision: "exact"`, `pricingModel: "per-invocation"`, `supportsLiveSubscription: true`, `supportsResumeFromStep: true`.
 
-- Tier 1 fast-wins from `next-up.md` (`thodare workflow` CLI commands, `@thodare/telemetry-otel`, etc.) — useful but not gating; they slot in opportunistically alongside the v1 phases.
-- Marketplace primitive — held to v1.1+ per `next-up.md`. Don't be tempted.
+Build target: `thodare build --target=vercel` produces a Build Output API v3 layout + a `vercel.json` (merged into the user's `vercel.json` if present per Flue's `cloudflare-wrangler-merge.ts:563-580` pattern, generalized). User runs `vercel --prod` themselves.
+
+### Phase 5b — `examples/deploy-cloudflare/` + `examples/headless-ui-demo/`
+
+`examples/deploy-cloudflare/` — full Wrangler deploy story for the CF adapter (now that runtime walker + streams ship); validates the README's quick-start against a real CF deployment.
+
+`examples/headless-ui-demo/` — demonstrates Thodare-as-headless-backend: visual builder consumes the typed control plane.
+
+### Phase 5+ follow-ups for the CF adapter (queued from Phases 4–4.x.1)
+
+These are non-blocking but tracked:
+
+1. **Real CF Workflows deploy validation** (`wrangler dev`). The vitest-pool-workers can dispatch the FIRST `create()` reliably; a second in the same test run may stay `running` — consistent with the upstream library's own test gap.
+2. **Hibernating WebSocket API** for `LogSession` — current pattern uses `WebSocketPair` + `ws.accept()`, which limits scale.
+3. **Explicit `organization_id` column on DO chunks** — current model relies on `runId` UUID unguessability for cross-org isolation. Acceptable for alpha.
+4. **CF control-flow exception assumption** — `cf-step-shim`'s `try/catch` assumes CF's `step.do()` doesn't surface engine-internal sleep/wait parking exceptions. Mock-tested only; verify against real CF deploy.
+5. **Harness de-vacuing + `start()`/`restart()` formalization** (queued from PR #7 ledger). Apply to CF adapter once Phase 5 is done.
+
+### Phase 5c — six v1 design closures (~3w, parallelizable)
+
+Per proposal §3.10–§3.14 + §4.8:
+
+- Container blocks (§3.10)
+- Output `hiddenFromDisplay` + `paramVisibility: 'llm-only'` (§3.11)
+- Dynamic schema endpoint (§3.12)
+- Timezone-aware waits (§3.13)
+- diff→ops endpoint (§3.14)
+- `@thodare/router` companion package (§4.8)
+
+Plus 5 first-party connector packages: `@thodare/connector-{slack,resend,github,stripe,google-sheets}` shipping ActivePieces-style.
+
+### Phase 5d — `dev` → `main` for v1.0 GA
+
+When all five adapters are in (`@thodare/backend-self-host-postgres` is shipped via `backend-openworkflow-pg`; `self-host-sqlite` via `backend-openworkflow-sqlite`; `cloudflare` via `backend-cloudflare-dynamic`; `vercel` is Phase 5a; AWS skipped) and Phase 5c closures land:
+
+1. `pnpm changeset version` to compute the v1.0 release.
+2. PR `dev` → `main`.
+3. `pnpm release` to publish all v1 alpha packages off the `latest` dist-tag for the first time.
+
+### What's deliberately NOT next
+
+- AWS adapter — explicitly out of scope for v1.0.
+- Marketplace primitive — held to v1.1+ per `next-up.md`.
 - Any feature flag gating — explicitly rejected in `RELEASE.md`. Capability flags (interface declarations) ARE the answer; runtime feature flags ARE NOT.
 
 **Trust the proposal**; don't redesign. If you find yourself contradicting `research/backend-abstraction-proposal.md` §3 or §4, stop and re-read it before writing code.
+
+### Workflow / process notes (carry forward from Phases 4–4.x.1)
+
+The session that closed Phases 4–4.x.1 used `/ship-it-managed` discipline:
+
+1. **Decompose** into worker-sized chunks with explicit acceptance criteria.
+2. **Delegate** to pi (default `opencode-go/deepseek-v4-pro`, 1M context) async on a feature branch.
+3. **Adversarial review** with codex (`gpt-5.3-codex`, read-only sandbox) + pi-glm (`opencode-go/glm-5.1`) **in parallel** — read the actual diff, not the worker's summary.
+4. **Take ownership** — fix small deviations directly; re-delegate only structural ones. Multiple reviewers diverging on the same finding means the brief was thin; tighten and re-fire.
+5. **Verify** — package tests + workspace baseline + `tsc --noEmit` + no `as any`/`@ts-ignore` + T6/T11/T17 honored.
+6. **PR** against `dev`; squash-merge after green; delete branch.
+
+Brief format lives in `.handoff/brief-*.md`. Results in `.handoff/result-*.txt` (gitignored). The IC contract (`/ship-it`) is auto-prepended to every worker brief by `/delegate`.
+
+When codex hits its usage limit (it did once this session at ~5:44 AM reset), substitute **claude-glm** as second cross-family reviewer — same pattern works.
+
+Pi's CLI choked on prompts that start with `---` (frontmatter delimiter parsed as flag). Fix is prepending `# Engineering standard\n\n` to the prompt before piping. Same for `claude-glm`. Already baked into the `/delegate` skill but watch for it.
+
+**The upstream-verification audit (`.handoff/result-cf-upstream-verification.txt`) was the load-bearing review of Phases 4–4.x.** It caught two P1s + one P2 that codex AND pi-glm both missed — they were upstream-API-correctness issues that only surface when you read `cloudflare/dynamic-workflows@0.1.1` source directly and compare. **Repeat this pattern for `@thodare/backend-vercel`**: after the adapter lands, fire a pi worker to compare against Vercel's actual primitive APIs (Postgres SDK, Cron, Queues, Functions). Don't trust two reviewers on the same internal lens.
 
 ---
 
@@ -441,4 +520,87 @@ should not.
 
 When in doubt, re-read [`../SPEC.md`](../SPEC.md) §3 (T1–T19) AND [`../research/backend-abstraction-proposal.md`](../research/backend-abstraction-proposal.md) §3 + §4. If you're about to make a decision that contradicts either, **stop and ask first** (the proposal IS the RFC; SPEC.md is the v0 constitution).
 
-— last session, 2026-05-02 (v1 design phase complete; Phase 1 not yet started)
+— last session, 2026-05-04 (Phases 1–4.x.1 merged to `dev`; CF adapter functionally complete with real-engine e2e test; Phase 5 / `@thodare/backend-vercel` is next).
+
+---
+
+## 13. Session 2026-05-04 — kickoff for next Claude
+
+### Pick up here
+
+You are inheriting a `dev` branch with **10 squash-merged PRs** completing v1 Phases 1–4.x.1. `main` is untouched at `5970bd5`. The CF adapter is **functionally complete** — `runWorkflow` actually executes end-to-end on real CF Workflows engine (verified via `tests/real-engine-e2e.test.ts` in workerd 1.20260310.1 inside vitest-pool-workers@0.12.21).
+
+**Your next task is Phase 5a — `@thodare/backend-vercel`** per proposal §4.4. **AWS is out of scope** for v1.0 (user direction).
+
+### First-3-minute reading list
+
+1. This file §2 (current state) and §8 (what's next).
+2. `research/backend-abstraction-proposal.md` §4.4 (Vercel-native composition) and §4.7 (capability matrix).
+3. `packages/backend-cloudflare-dynamic/` — your reference adapter shape. Note specifically:
+   - `src/adapter.ts` — `BackendCloudflareDynamic implements BackendCore`.
+   - `src/dispatcher.ts` — `_buildLoadRunner` factory pattern (test-internal export).
+   - `src/cf-step-shim.ts` — wraps CF step into engine step.
+   - `tests/real-engine-e2e.test.ts` — proves the dispatch path actually fires.
+4. `packages/backend-openworkflow-pg/` — reference adapter for any Postgres-shaped backend.
+
+### Workflow
+
+**Use `/ship-it-managed`.** That gave Phases 4 / 4.x / 4.x.1 their quality. Pattern recap:
+
+1. Decompose into worker-sized chunks with explicit acceptance criteria.
+2. Delegate to pi async on a feature branch (`backend-vercel-phase-5a`). Brief lives in `.handoff/brief-<slug>.md`. Result goes to `.handoff/result-<slug>.txt` (gitignored).
+3. While pi works, you stay free.
+4. After pi delivers: dual-review with **codex + pi-glm in parallel**. Read the diff, not the summary.
+5. Fix small deviations directly. Re-delegate only structural deviations.
+6. **Then fire an upstream-verification audit** — same pattern as `.handoff/brief-cf-upstream-verification.md`. Have pi compare the new adapter against Vercel's actual primitive APIs (Postgres SDK, Vercel Cron, Vercel Queues, Vercel Functions, Vercel Blob). This caught the load-bearing P1s in Phase 4 that the two internal reviewers missed.
+7. PR against `dev`; squash-merge after green; delete branch.
+
+### Hard rules (carry forward)
+
+- **No `as any` / `@ts-ignore` / `@ts-expect-error`** anywhere. T17.
+- **No fallback escape hatches.** If a capability isn't supported, declare it `false` in `BackendCapabilities` and `throw notImplemented(...)`. Silent degradation is a breach of trust.
+- **Capability flags are NOT feature flags.** Don't add env-var gates. Capabilities are interface declarations the frontend uses to hide unsupported affordances.
+- **T6**: zero source-file delta to `packages/openworkflow/`.
+- **T11**: every storage table carries `organization_id`; every query filters on it. Cross-org reads return null/404, not 403.
+- **Out of scope**: don't touch `packages/openworkflow/`, `packages/backend-openworkflow-{pg,sqlite,shared}/`, `packages/backend-cloudflare-dynamic/`, `packages/api/`, `packages/cli/`, `packages/engine/` unless the work genuinely requires it (and if it does, **disclose explicitly in the PR body** like Phase 4.x did with the engine subpath-export change).
+
+### Test posture invariant
+
+After your PR, the workspace baseline must read:
+
+```
+pnpm -r --filter '!@thodare/docs' --workspace-concurrency=1 run test
+# 22 (contract-tests) + 122 (engine) + 63 (api) + 41 (PG) + 40 (SQLite) + 46 (CF-dynamic) + 36 (cli) + N (vercel) = 370 + N
+```
+
+Don't break the 370 baseline. If you do, that's a regression in someone else's work caused by your change.
+
+### Expect to use these tools
+
+- `/delegate` — fires a worker async with the IC contract auto-prepended.
+- `/ship-it-managed` — the meta-workflow command for the whole loop.
+- `/workers` — inspect available delegation workers.
+- `gh pr create / gh pr merge --squash --delete-branch` — same flow as Phases 4–4.x.1.
+
+### Watchouts from this session
+
+1. **Codex usage limit**: codex hit its OpenAI usage limit during one review. Fallback was claude-glm with the same brief — worked fine. If codex throws "usage limit", swap claude-glm in.
+2. **Pi/claude-glm CLI parser**: prompts starting with `---` (frontmatter) get parsed as a flag and crash. Already mitigated in `/delegate` (prefixes `# Engineering standard\n\n`), but if you fire a worker manually, do the same.
+3. **Pi sometimes silently scope-creeps.** Phase 4.x pi modified `packages/engine/` (subpath exports) despite "do NOT modify" in the brief. It WAS legitimate (engine's barrel pulls `node:crypto` which workerd can't run). Pi disclosed it in the report — accepted-with-disclosure. Apply the same posture: read pi's "Discovered contradictions with the brief" section every time. If pi changed something out of scope and the reason is sound, accept-with-disclosure in the PR body. If unsound, revert and re-delegate with a tighter brief.
+4. **Workspace test (`pnpm -r run test`) excludes `@thodare/docs`** — astro check is interactive, hangs the test pool. Use `--filter '!@thodare/docs'` always. Already baked into the convention.
+5. **Real-engine tests in workerd**: vitest-pool-workers@0.12.21 (workerd 1.20260310.1) does support CF Workflows dispatch in-pool — but only for the FIRST `create()` in a test run. A second may stay `running` indefinitely. Same gap upstream's own tests note. If you write similar tests for the Vercel adapter, anticipate the same kind of pool-vs-real-engine gap and document explicitly.
+6. **Don't over-scope `defineWorkflow`'s contract**. CF adapter learned the hard way that `defineWorkflow(spec, handler)` isn't enough for a serverless adapter that can't execute the handler in-process — it needs `setWorkflowDefinition(name, version, json)` as a CF-specific extension method. Vercel will likely face the same shape: `defineWorkflow` registers; a CF/Vercel-specific method attaches the JSON. Keep the cross-cutting `WorkflowSpec` contract in `@thodare/backend` unchanged.
+
+### Handoff files for this session (audit trail)
+
+All in `.handoff/`:
+
+- `brief-cf-dynamic-phase-4-x.md` + `result-cf-dynamic-phase-4-x.txt` — Phase 4.x delegation
+- `brief-cf-dynamic-phase-4-x-review.md` + `result-cf-dynamic-phase-4-x-review-{piglm,claude-glm}.txt` — Phase 4.x dual review
+- `brief-cf-upstream-verification.md` + `result-cf-upstream-verification.txt` — the upstream audit
+- `brief-cf-dynamic-phase-4-x-1.md` + `result-cf-dynamic-phase-4-x-1.txt` — Phase 4.x.1 delegation
+- `brief-cf-dynamic-phase-4-x-1-review.md` + `result-cf-dynamic-phase-4-x-1-review-{codex,piglm}.txt` — Phase 4.x.1 dual review
+
+These are the templates to copy when writing the Phase 5 briefs. Adapt the structure (Required reading / Files in scope / Hard rules / Out of scope / Definition of done / Reporting) — the format is what gives reviews their teeth.
+
+— session 2026-05-04 closed; CF adapter is real-engine-validated; Phase 5 / Vercel adapter is the open work.
