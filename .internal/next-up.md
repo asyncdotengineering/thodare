@@ -1,5 +1,9 @@
 # Next-up — prioritized work queue
 
+> **Read [`HANDOFF.md`](./HANDOFF.md) §13 first** — it's the kickoff for the next session. Phases 1–4.x.1 of the v1 backend-abstraction proposal are merged to `dev`. Phase 5 (`@thodare/backend-vercel`) is the open work. AWS is out of scope for v1.0.
+>
+> **Stale-but-kept items**: Tier 2 entries below ("Factor Backend interface for runtime portability", "Cloudflare Workers backend") describe work that has been **completed in Phases 1–4.x.1** — kept for historical context. The current Phase 5 plan supersedes those.
+
 Ranked by leverage and effort. Pick from the top of a tier; ship; come
 back. Each item references the SPEC section it sits under (so you
 don't redesign decisions T1–T19 already made).
@@ -79,7 +83,7 @@ don't redesign decisions T1–T19 already made).
 
 ## Tier 2 — meaningful structural work (3–5 days)
 
-### Factor Backend interface for runtime portability
+### Factor Backend interface for runtime portability — **DONE 2026-05-04** (Phases 1–3 merged to `dev`; superseded by `@thodare/backend` + `@thodare/backend-contract-tests` + 3 adapters)
 
 - **Why.** Today `@thodare/engine` is tightly coupled to openworkflow's
   specific `Backend` shape. A future Cloudflare Workflows backend
@@ -106,7 +110,7 @@ don't redesign decisions T1–T19 already made).
 - **SPEC §:** prep for v1+ deferred items. Doesn't add a feature; it
   unlocks the option to add one cheaply later.
 
-### `@thodare/cf-engine` (gated on customer signal)
+### `@thodare/cf-engine` (gated on customer signal) — **SUPERSEDED 2026-05-04** by `@thodare/backend-cloudflare-dynamic` (Phases 4 + 4.x + 4.x.1 merged to `dev`; uses `cloudflare/dynamic-workflows@^0.1.1` + D1 + DO+WS streams). Real-engine e2e validated.
 
 - **Why.** Once the Backend interface exists (above), implementing CF
   Workflows as a second backend becomes a self-contained week-ish
@@ -157,7 +161,7 @@ don't redesign decisions T1–T19 already made).
   - 4+ tests including a slow consumer.
 - **SPEC §:** v0 deferred.
 
-### Cloudflare Workers backend (durable objects)
+### Cloudflare Workers backend (durable objects) — **SUPERSEDED 2026-05-04** — see `@thodare/backend-cloudflare-dynamic` above
 
 - **Why.** openworkflow's worker assumes a long-running process.
   Workers + Durable Objects can host the API surface AND the durable
